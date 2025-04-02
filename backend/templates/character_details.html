@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ character.name }} - Character Details</title>
+    <style>
+        /* ... (existing styles) ... */
+        .character-info {
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>{{ character.name }} - {{ character.realm.name }}</h1>
+
+    {% if character_media and character_media.assets %}
+    {% for asset in character_media.assets %}
+    {% if asset.key == 'avatar' %}
+    <img class="character-portrait" src="{{ asset.value }}" alt="{{ character }} portrait">
+    {% endif %}
+    {% endfor %}
+    {% endif %}
+
+    <div class="character-info">
+        {% if character.guild %}
+        <p><strong>Guild:</strong> <a href="/guild/{{ character.guild.realm.slug }}/{{ character.guild.name }}">{{ character.guild.name }} - {{ character.guild.realm.name }}</p></a>
+        {% endif %}
+
+        {% if avg_item_level > 0 %}
+        <p><strong>Average Item Level:</strong> {{ avg_item_level }}</p>
+        {% endif %}
+
+        <p><strong>Mythic+ Score:</strong> {% if keystone_score is not none %}{{ keystone_score }}{% else %}0{% endif %}</p>
+
+        {% if highest_keystone %}
+        <p><strong>Highest Mythic+ Keystone:</strong> {{ highest_keystone }}</p>
+        {% endif %}
+
+    {% if current_raid %}
+    <p><strong>{{ current_raid.instance.name }} Progress:</strong>
+        {% if current_raid.highest_difficulty and current_raid.highest_progress %}
+        {{ current_raid.highest_progress.completed_count }}/{{ current_raid.highest_progress.total_count }}
+        {{ current_raid.highest_difficulty }}
+        {% else %}
+        No progress in {{ current_raid.instance.name }}
+        {% endif %}
+    </p>
+    {% endif %}
+    </div>
+
+    <h2>Equipment</h2>
+    {% if equipment and equipment.equipped_items %}
+    <ul>
+        {% for item in equipment.equipped_items %}
+        <li class="equipment-item">
+            <strong>{{ item.slot.name }}:</strong>
+            {{ item.name }}
+            {% if item.level %}
+            (Item Level: {{ item.level.value }})
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p>No equipment information available.</p>
+    {% endif %}
+    <a href="https://worldofwarcraft.blizzard.com/en-us/character/us/{{ character.realm.slug }}/{{ character.name }}">Armory</a>
+    | <a href="https://www.warcraftlogs.com/character/us/{{ character.realm.slug }}/{{ character.name }}">WarcraftLogs</a>
+    | <a href="https://www.raider.io/characters/us/{{ character.realm.slug }}/{{ character.name }}">Raider.IO</a>
+
+    <p><a href="/account/profile">Back to Characters</a></p>
+    <p><a href="/account">Back to Account</a></p>
+</body>
+
+</html>

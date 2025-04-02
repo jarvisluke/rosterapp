@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>{{ guild.name }} - Guild Details</title>
+    <style>
+        /* ... (existing styles) ... */
+        .character-info {
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>{{ guild.name}} - {{ guild.realm.name}}</h1>
+
+    <div class="guild-info">
+        <h2>Roster</h2>
+        
+        {% for member in roster.members %}
+        <li>
+            <a href="/character/{{ member.character.realm.slug }}/{{ member.character.name.lower() }}">
+                <strong>{{ member.character.name }} - {{ member.character.realm.name }}</strong>
+            </a>
+            <ul>
+                <li>Level: {{ member.character.level }}</li>
+                <li>Race: {{ member.character.playable_race.name }}</li>
+                <li>Class: {{ member.character.playable_class.name }}</li>
+            </ul>
+        </li>
+        {% endfor %}
+    </div>
+</body>
+
+</html>

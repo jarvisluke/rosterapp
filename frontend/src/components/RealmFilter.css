@@ -1,0 +1,14 @@
+.realm-filter-box {
+    border: 1px solid #ccc;
+    padding: 10px;
+    margin-top: 10px;
+}
+
+.realm-filter-box label {
+    display: block;
+    margin: 5px 0;
+}
+
+.realm-filter-box button {
+    margin-top: 10px;
+}

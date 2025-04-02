@@ -1,0 +1,16 @@
+/* .roster-grid, .bench-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1rem;
+  }
+  
+  .roster-slot {
+    min-height: 80px;
+  }
+  
+  .empty-slot {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  } */

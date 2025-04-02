@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Context Inspector</title>
+    <style>
+        .container {
+            padding: 20px;
+            font-family: monospace;
+            font-size: 14px;
+            line-height: 1.3;
+        }
+        .key {
+            color: #2c5282;
+            font-weight: bold;
+        }
+        .string {
+            color: #2f855a;
+        }
+        .number {
+            color: #744210;
+        }
+        .boolean {
+            color: #9b2c2c;
+        }
+        .null {
+            color: #718096;
+            font-style: italic;
+        }
+        .indent {
+            margin-left: 20px;
+            display: inline;
+        }
+        pre {
+            background: #f7fafc;
+            padding: 10px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .bracket {
+            color: #4a5568;
+        }
+        .comma {
+            color: #4a5568;
+            margin-right: 4px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Template Context Inspector</h1>
+    
+    {% macro display_value(value) %}
+        {% if value is mapping %}
+            <span class="bracket">{</span>
+            {% for k, v in value.items() %}
+                <span class="key">{{ k }}</span>: {{ display_value(v) }}{% if not loop.last %}<span class="comma">,</span>{% endif %}
+            {% endfor %}
+            <span class="bracket">}</span>
+        {% elif value is sequence and value is not string %}
+            <span class="bracket">[</span>
+            {% for item in value %}
+                {{ display_value(item) }}{% if not loop.last %}<span class="comma">,</span>{% endif %}
+            {% endfor %}
+            <span class="bracket">]</span>
+        {% elif value is string %}
+            <span class="string">"{{ value }}"</span>
+        {% elif value is number %}
+            <span class="number">{{ value }}</span>
+        {% elif value is boolean %}
+            <span class="boolean">{{ value }}</span>
+        {% elif value is none %}
+            <span class="null">null</span>
+        {% else %}
+            {{ value }}
+        {% endif %}
+    {% endmacro %}
+
+    <pre>{
+    {% if battle_tag is defined %}
+    <span class="key">battle_tag</span>: {{ display_value(battle_tag) }}{% if character is defined or realm is defined or equipment is defined or character_media is defined or avg_item_level is defined or keystone_score is defined or highest_keystone is defined or current_raid is defined or guild_name is defined %}<span class="comma">,</span>{% endif %}
+    {% endif %}
+    {% if character is defined %}
+    <span class="key">character</span>: {{ display_value(character) }}{% if realm is defined or equipment is defined or character_media is defined or avg_item_level is defined or keystone_score is defined or highest_keystone is defined or current_raid is defined or guild_name is defined %}<span class="comma">,</span>{% endif %}
+    {% endif %}
+    {% if realm is defined %}
+    <span class="key">realm</span>: {{ display_value(realm) }}{% if equipment is defined or character_media is defined or avg_item_level is defined or keystone_score is defined or highest_keystone is defined or current_raid is defined or guild_name is defined %}<span class="comma">,</span>{% endif %}
+    {% endif %}
+    {% if equipment is defined %}
+    <span class="key">equipment</span>: {{ display_value(equipment) }}{% if character_media is defined or avg_item_level is defined or keystone_score is defined or highest_keystone is defined or current_raid is defined or guild_name is defined %}<span class="comma">,</span>{% endif %}
+    {% endif %}
+    {% if character_media is defined %}
+    <span class="key">character_media</span>: {{ display_value(character_media) }}{% if avg_item_level is defined or keystone_score is defined or highest_keystone is defined or current_raid is defined or guild_name is defined %}<span class="comma">,</span>{% endif %}
+    {% endif %}
+    {% if avg_item_level is defined %}
+    <span class="key">avg_item_level</span>: {{ display_value(avg_item_level) }}{% if keystone_score is defined or highest_keystone is defined or current_raid is defined or guild_name is defined %}<span class="comma">,</span>{% endif %}
+    {% endif %}
+    {% if keystone_score is defined %}
+    <span class="key">keystone_score</span>: {{ display_value(keystone_score) }}{% if highest_keystone is defined or current_raid is defined or guild_name is defined %}<span class="comma">,</span>{% endif %}
+    {% endif %}
+    {% if highest_keystone is defined %}
+    <span class="key">highest_keystone</span>: {{ display_value(highest_keystone) }}{% if current_raid is defined or guild_name is defined %}<span class="comma">,</span>{% endif %}
+    {% endif %}
+    {% if current_raid is defined %}
+    <span class="key">current_raid</span>: {{ display_value(current_raid) }}{% if guild_name is defined %}<span class="comma">,</span>{% endif %}
+    {% endif %}
+    {% if guild_name is defined %}
+    <span class="key">guild_name</span>: {{ display_value(guild_name) }}
+    {% endif %}
+}</pre>
+</div>
+</body>
+</html>

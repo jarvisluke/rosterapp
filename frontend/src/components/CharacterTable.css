@@ -1,0 +1,39 @@
+.table-fixed {
+    table-layout: fixed;
+    width: 100%;
+}
+
+.rank-column {
+    width: 80px;
+    text-align: center;
+}
+
+.class-column {
+    width: 80px;
+    text-align: center;
+}
+
+.name-column {
+    /* Will take remaining width */
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.level-column {
+    width: 80px;
+    text-align: center;
+}
+
+.race-column {
+    width: 120px;
+    text-align: left;
+}
+
+/* Ensure td elements follow the same rules */
+td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

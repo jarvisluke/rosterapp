@@ -1,0 +1,14 @@
+.class-filter-box {
+    border: 1px solid #ccc;
+    padding: 10px;
+    margin-top: 10px;
+  }
+  
+  .class-filter-box label {
+    display: block;
+    margin: 5px 0;
+  }
+  
+  .class-filter-box button {
+    margin-top: 10px;
+  }
