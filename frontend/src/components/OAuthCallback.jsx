@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 
-function OAuthCallback() {
+function  OAuthCallback() {
   const [error, setError] = useState(null);
   const navigate = useNavigate();
   const location = useLocation();

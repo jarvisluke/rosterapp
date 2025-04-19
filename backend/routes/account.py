@@ -25,7 +25,7 @@ async def get_login_url(response: Response):
         key="oauth_state",
         value=state,
         httponly=True,
-        secure=True,
+        secure=False, # SET TO True FOR PRODUCTION
         samesite="lax",
         max_age=300
     )

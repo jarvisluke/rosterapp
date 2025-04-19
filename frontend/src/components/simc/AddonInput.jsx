@@ -117,6 +117,12 @@ const AddonInput = ({ onDataUpdate, pairedSlots, skippedSlots }) => {
       let currentItemName = '';
       let isGearFromBags = false;
 
+      // Special handling for rings - combine into a single 'rings' slot
+      const ringItems = {
+        equipped: [],
+        alternatives: []
+      };
+
       for (const line of lines) {
         if (line.startsWith('### Gear from Bags')) {
           isGearFromBags = true;
@@ -153,49 +159,50 @@ const AddonInput = ({ onDataUpdate, pairedSlots, skippedSlots }) => {
                 itemLevel: itemLevel
               };
 
-              if (!items[slot]) {
-                items[slot] = {
-                  equipped: null,
-                  alternatives: []
-                };
-              }
-
-              // For paired slots, initialize the paired slot if it doesn't exist
-              if (pairedSlots[slot] && !items[pairedSlots[slot]]) {
-                items[pairedSlots[slot]] = {
-                  equipped: null,
-                  alternatives: []
-                };
-              }
-
-              if (isGearFromBags) {
-                // Add to alternatives but avoid duplicates
-                const isDuplicate = items[slot].alternatives.some(item => item.id === itemId) ||
-                  (items[slot].equipped && items[slot].equipped.id === itemId);
-
-                if (!isDuplicate) {
-                  items[slot].alternatives.push(itemData);
-
-                  // For paired slots, add this item as an alternative to the paired slot
-                  if (pairedSlots[slot] && !items[pairedSlots[slot]].alternatives.some(item => item.id === itemId) &&
-                    !(items[pairedSlots[slot]].equipped && items[pairedSlots[slot]].equipped.id === itemId)) {
-                    items[pairedSlots[slot]].alternatives.push(itemData);
+              // Handle ring slots separately
+              if (slot === 'finger1' || slot === 'finger2') {
+                if (!isGearFromBags) {
+                  // Add to equipped rings if not already there
+                  if (!ringItems.equipped.some(ring => ring.id === itemId)) {
+                    ringItems.equipped.push(itemData);
+                  }
+                } else {
+                  // Add to alternatives if not already there and not equipped
+                  const isEquipped = ringItems.equipped.some(ring => ring.id === itemId);
+                  const isAlreadyAlternative = ringItems.alternatives.some(ring => ring.id === itemId);
+                  
+                  if (!isEquipped && !isAlreadyAlternative) {
+                    ringItems.alternatives.push(itemData);
                   }
                 }
               } else {
-                items[slot].equipped = itemData;
+                // Handle normal slots
+                if (!items[slot]) {
+                  items[slot] = {
+                    equipped: null,
+                    alternatives: []
+                  };
+                }
 
-                // For paired slots, add the equipped item as an alternative to paired slot
-                if (pairedSlots[slot] &&
-                  !items[pairedSlots[slot]].alternatives.some(item => item.id === itemId) &&
-                  !(items[pairedSlots[slot]].equipped && items[pairedSlots[slot]].equipped.id === itemId)) {
-                  items[pairedSlots[slot]].alternatives.push({ ...itemData });
+                if (isGearFromBags) {
+                  // Add to alternatives but avoid duplicates
+                  const isDuplicate = items[slot].alternatives.some(item => item.id === itemId) ||
+                    (items[slot].equipped && items[slot].equipped.id === itemId);
+
+                  if (!isDuplicate) {
+                    items[slot].alternatives.push(itemData);
+                  }
+                } else {
+                  items[slot].equipped = itemData;
                 }
               }
             }
           }
         }
       }
+
+      // Add the combined rings to the items object
+      items.rings = ringItems;
 
       return {
         character: {
@@ -214,15 +221,6 @@ const AddonInput = ({ onDataUpdate, pairedSlots, skippedSlots }) => {
       throw err;
     }
   };
-
-  /* // Initialize Wowhead tooltips when data changes
-  useEffect(() => {
-    if (window.$WowheadPower && window.$WowheadPower.refreshLinks) {
-      setTimeout(() => {
-        window.$WowheadPower.refreshLinks();
-      }, 100);
-    }
-  }, [simcInput]); */
 
   return (
     <>
