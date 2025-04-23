@@ -1,13 +1,13 @@
-import { 
-  useEffect, 
-  useRef, 
-  useState, 
-  useMemo, 
-  useCallback, 
-  createContext, 
-  useContext, 
-  useReducer, 
-  memo 
+import {
+  useEffect,
+  useRef,
+  useState,
+  useMemo,
+  useCallback,
+  createContext,
+  useContext,
+  useReducer,
+  memo
 } from 'react';
 import AddonInput from './AddonInput';
 import ArmoryInput from './ArmoryInput';
@@ -123,7 +123,7 @@ const MemoizedAdditionalOptions = memo(({ options, onChange }) => {
 // Isolated EquipmentSection component
 const EquipmentSection = memo(({ itemsData }) => {
   const dispatch = useSimulationDispatch();
-  
+
   const preparedItems = useMemo(() => {
     if (!itemsData) return [];
 
@@ -217,6 +217,10 @@ function Simc() {
   const [realmIndex, setRealmIndex] = useState(null);
   const simulationResultRef = useRef(null);
   const [simulationState, dispatch] = useReducer(simulationReducer, initialSimulationState);
+  const [jobId, setJobId] = useState(null);
+  const [jobStatus, setJobStatus] = useState(null);
+  const [queueStatus, setQueueStatus] = useState(null);
+  const statusCheckIntervalRef = useRef(null);
 
   useEffect(() => {
     const fetchRealms = async () => {
@@ -230,6 +234,116 @@ function Simc() {
 
     fetchRealms();
   }, []);
+
+  // Test that async routes and worker are functioning
+  useEffect(() => {
+    const testAsyncRoutes = async () => {
+      try {
+        const queueStatusResponse = await fetch('/api/simulate/queue/status');
+        if (queueStatusResponse.ok) {
+          const queueData = await queueStatusResponse.json();
+          console.log('Queue status working:', queueData);
+        } else {
+          console.error('Queue status endpoint not working');
+        }
+      } catch (error) {
+        console.error('Error testing async routes:', error);
+      }
+    };
+
+    testAsyncRoutes();
+  }, []);
+
+  useEffect(() => {
+    // Clean up status check interval when component unmounts
+    return () => {
+      if (statusCheckIntervalRef.current) {
+        clearInterval(statusCheckIntervalRef.current);
+      }
+    };
+  }, []);
+
+  // Poll job status when jobId exists
+  useEffect(() => {
+    if (!jobId) return;
+
+    const checkStatus = async () => {
+      try {
+        const response = await fetch(`/api/simulate/status/${jobId}`);
+        if (!response.ok) {
+          throw new Error('Failed to get job status');
+        }
+        const status = await response.json();
+        setJobStatus(status);
+
+        // When complete, fetch result and clear interval
+        if (status.status === 'COMPLETED') {
+          clearInterval(statusCheckIntervalRef.current);
+          fetchSimulationResult(jobId);
+        } else if (status.status === 'FAILED') {
+          clearInterval(statusCheckIntervalRef.current);
+          alert(`Simulation failed: ${status.error || 'Unknown error'}`);
+          dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
+        }
+      } catch (error) {
+        console.error('Error checking job status:', error);
+      }
+    };
+
+    // Start polling
+    checkStatus();
+    statusCheckIntervalRef.current = setInterval(checkStatus, 3000);
+
+    return () => {
+      clearInterval(statusCheckIntervalRef.current);
+    };
+  }, [jobId]);
+
+  // Fetch queue status periodically while simulating
+  useEffect(() => {
+    if (!simulationState.isSimulating) {
+      setQueueStatus(null);
+      return;
+    }
+
+    const fetchQueueStatus = async () => {
+      try {
+        const response = await fetch('/api/simulate/queue/status');
+        if (response.ok) {
+          const status = await response.json();
+          setQueueStatus(status);
+        }
+      } catch (error) {
+        console.error('Error fetching queue status:', error);
+      }
+    };
+
+    fetchQueueStatus();
+    const interval = setInterval(fetchQueueStatus, 10000);
+
+    return () => clearInterval(interval);
+  }, [simulationState.isSimulating]);
+
+  const fetchSimulationResult = async (id) => {
+    try {
+      const response = await fetch(`/api/simulate/result/${id}`);
+      if (!response.ok) {
+        throw new Error(`Error: ${response.statusText}`);
+      }
+
+      const htmlContent = await response.text();
+      dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_RESULT, payload: htmlContent });
+      dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
+
+      if (simulationResultRef.current) {
+        simulationResultRef.current.scrollIntoView({ behavior: 'smooth' });
+      }
+    } catch (error) {
+      console.error('Error fetching simulation result:', error);
+      alert('Failed to retrieve simulation result: ' + error.message);
+      dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
+    }
+  };
 
   const handleDataUpdate = useCallback((data) => {
     if (data) {
@@ -294,7 +408,7 @@ function Simc() {
   const extractCharacterInfo = useCallback((simcInput) => {
     const charInfo = [];
     const lines = simcInput.split('\n');
-    
+
     let detectedClass = '';
     for (const line of lines) {
       if (line.startsWith('spec=')) {
@@ -308,7 +422,7 @@ function Simc() {
         break;
       }
     }
-    
+
     let characterName = 'Character';
     const commentLine = lines.find(line => line.startsWith('#'));
     if (commentLine) {
@@ -317,7 +431,7 @@ function Simc() {
         characterName = match[1];
       }
     }
-    
+
     if (detectedClass) {
       charInfo.push(`${detectedClass}="${characterName}"`);
     } else {
@@ -366,12 +480,12 @@ function Simc() {
 
   const addSimulationOptions = useCallback((inputText, simOptions) => {
     let options = [];
-    
+
     options.push(`max_time=${simOptions.fightDuration}`);
-    
+
     if (!simOptions.optimalRaidBuffs) {
       options.push('optimal_raid=0');
-      
+
       options.push(`override.bloodlust=${simOptions.bloodlust ? 1 : 0}`);
       options.push(`override.arcane_intellect=${simOptions.arcaneIntellect ? 1 : 0}`);
       options.push(`override.battle_shout=${simOptions.battleShout ? 1 : 0}`);
@@ -382,9 +496,9 @@ function Simc() {
       options.push(`override.skyfury=${simOptions.skyfury ? 1 : 0}`);
       options.push(`override.hunters_mark=${simOptions.huntersMark ? 1 : 0}`);
     }
-    
+
     options.push(`external_buffs.power_infusion=${simOptions.powerInfusion ? 1 : 0}`);
-    
+
     return `${inputText}\n\n# Simulation Options\n${options.join('\n')}`;
   }, []);
 
@@ -443,6 +557,8 @@ function Simc() {
     if (!simulationState.characterData) return;
 
     dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: true });
+    setJobId(null);
+    setJobStatus(null);
 
     try {
       let input;
@@ -453,16 +569,16 @@ function Simc() {
         } else {
           const lines = simulationState.simcInput.split('\n').filter(line => !line.startsWith('Simulation input:'));
           const characterInfo = extractCharacterInfo(simulationState.simcInput);
-          
+
           const remainingLines = lines.filter(line => {
             if (line.startsWith('#') || line.startsWith('//')) return true;
-            if (['level=', 'race=', 'region=', 'server=', 'role=', 'professions=', 
-                'spec=', 'talents=', 'covenant=', 'soulbind='].some(s => line.startsWith(s))) {
+            if (['level=', 'race=', 'region=', 'server=', 'role=', 'professions=',
+              'spec=', 'talents=', 'covenant=', 'soulbind='].some(s => line.startsWith(s))) {
               return false;
             }
             return true;
           });
-          
+
           input = characterInfo + '\n\n' + remainingLines.join('\n');
           input = addSimulationOptions(input, simulationState.simOptions);
         }
@@ -475,7 +591,8 @@ function Simc() {
 
       const base64Input = btoa(input);
 
-      const response = await fetch('/api/simulate', {
+      // Use async endpoint instead
+      const response = await fetch('/api/simulate/async', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -487,33 +604,57 @@ function Simc() {
         throw new Error(`Error: ${response.statusText}`);
       }
 
-      const htmlContent = await response.text();
-      dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_RESULT, payload: htmlContent });
+      const result = await response.json();
+      setJobId(result.job_id);
+      setJobStatus(result);
+      console.log("Job queued:", result);
 
-      if (simulationResultRef.current) {
-        simulationResultRef.current.scrollIntoView({ behavior: 'smooth' });
-      }
     } catch (error) {
       console.error('Simulation error:', error);
       alert('Failed to run simulation: ' + error.message);
-    } finally {
       dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
     }
   }, [simulationState, inputMode, formatCombinations, extractCharacterInfo, addSimulationOptions]);
 
-  const downloadReport = useCallback(() => {
-    if (!simulationState.simulationResult) return;
+  // Render queue position/status when simulating
+  const renderSimulationStatus = () => {
+    if (!simulationState.isSimulating) return null;
 
-    const blob = new Blob([simulationState.simulationResult], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${simulationState.characterData?.name || 'character'}_sim_report.html`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, [simulationState.simulationResult, simulationState.characterData]);
+    let statusMessage = 'Preparing simulation...';
+    let estimatedTime = null;
+
+    if (jobStatus) {
+      if (jobStatus.status === 'QUEUED') {
+        statusMessage = `Position in queue: ${jobStatus.queue_position}`;
+        estimatedTime = jobStatus.estimated_wait;
+      } else if (jobStatus.status === 'PROCESSING') {
+        statusMessage = 'Simulation in progress...';
+        estimatedTime = jobStatus.estimated_wait || 30;
+      }
+    }
+
+    return (
+      <div className="alert alert-info mt-3">
+        <h5>Simulation Status</h5>
+        <div className="d-flex align-items-center">
+          <div className="spinner-border spinner-border-sm me-2" role="status"></div>
+          <div>{statusMessage}</div>
+        </div>
+        {estimatedTime && (
+          <div className="small mt-2">
+            Estimated time remaining: {Math.round(estimatedTime)} seconds
+          </div>
+        )}
+        {queueStatus && (
+          <div className="small mt-2">
+            <div>Active jobs: {queueStatus.active_jobs}</div>
+            <div>Queue length: {queueStatus.queue_length}</div>
+            <div>Average job duration: {Math.round(queueStatus.avg_job_duration)} seconds</div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <SimulationContext.Provider value={simulationState}>
@@ -521,12 +662,14 @@ function Simc() {
         <div className="container mt-3 pb-5 mb-5">
           {simulationState.simulationResult && (
             <div ref={simulationResultRef}>
-              <SimulationResults 
+              <SimulationResults
                 result={simulationState.simulationResult}
                 downloadReport={downloadReport}
               />
             </div>
           )}
+
+          {renderSimulationStatus()}
 
           <div className="mb-2">
             <input
@@ -587,7 +730,7 @@ function Simc() {
 
           {simulationState.characterData && (
             <CollapsibleSection title="Additional Options">
-              <MemoizedAdditionalOptions 
+              <MemoizedAdditionalOptions
                 options={simulationState.simOptions}
                 onChange={handleOptionsChange}
               />
@@ -595,14 +738,14 @@ function Simc() {
           )}
 
           {simulationState.characterData && (
-            <CombinationsSection 
+            <CombinationsSection
               combinations={simulationState.combinations}
               characterData={simulationState.characterData}
               itemsData={simulationState.itemsData}
             />
           )}
 
-          <SimulationButton 
+          <SimulationButton
             canSimulate={canSimulate}
             isSimulating={simulationState.isSimulating}
             onRun={runSimulation}
