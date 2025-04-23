@@ -5,7 +5,7 @@ import subprocess
 from datetime import datetime
 from typing import Optional
 
-from .cache import cache_simc_result
+from core.cache import cache_simc_result
 
 dotenv.load_dotenv()
 

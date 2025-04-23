@@ -1,3 +1,17 @@
+"""import redis
+import time
+import json
+import os
+from datetime import datetime
+from core.simc import SimcClient
+from base64 import b64decode
+
+# Get Redis configuration from environment
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+
+r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0)
+simc_client = SimcClient()"""
 import redis
 import time
 import json
