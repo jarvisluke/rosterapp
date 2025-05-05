@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select, and_
 
 from core.log import log
-from core import bliz
+from core.bliz import get_blizzard_client, BlizzardAPIClient
 from auth import get_current_user
 from database import get_db
 from models import (
@@ -134,12 +134,11 @@ async def get_guild_roster(
     realm: str,
     guild: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    bliz: BlizzardAPIClient = Depends(get_blizzard_client)
 ):
     if not current_user:
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
-
-    access_token = current_user.api_token
     
     guild_db = db.exec(
         select(Guild)
@@ -161,6 +160,8 @@ async def get_guild_roster(
             }
         )
 
+    access_token = current_user.api_token
+    
     # Fetch necessary data from Blizzard API
     race_index, class_index = await asyncio.gather(
         bliz.get_playable_race_index(access_token),
@@ -220,12 +221,11 @@ async def get_guild_rosters(
     realm: str,
     guild: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    bliz: BlizzardAPIClient = Depends(get_blizzard_client)
 ):
     if not current_user:
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
-
-    access_token = current_user.api_token
 
     guild_db = db.exec(
         select(Guild)
@@ -246,6 +246,8 @@ async def get_guild_rosters(
                 "error_code": "INSUFFICIENT_GUILD_RANK"
             }
         )
+
+    access_token = current_user.api_token
 
     # Fetch necessary data from Blizzard API
     class_index, realm_index = await asyncio.gather(
@@ -282,7 +284,8 @@ async def get_roster(
     guild: str,
     roster_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    bliz: BlizzardAPIClient = Depends(get_blizzard_client)
 ):
     if not current_user:
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
@@ -295,6 +298,8 @@ async def get_roster(
             status_code=404,
             content={"detail": "Roster not found or insufficient permissions"}
         )
+
+    access_token = current_user.api_token
 
     # Fetch necessary data from Blizzard API
     class_index, realm_index = await asyncio.gather(
@@ -315,158 +320,3 @@ async def get_roster(
     class_media_dict = dict(zip(class_dict.keys(), class_media_results))
     
     return await prepare_roster_response(roster, class_dict, class_media_dict, race_dict, realm_dict)
-
-@router.post("/guild/{realm}/{guild}/roster")
-async def create_roster(
-    realm: str,
-    guild: str,
-    roster_data: RosterUpdateRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    guild_db = db.exec(
-        select(Guild)
-        .where(Guild.name == guild, Guild.realm == realm)
-    ).first()
-
-    if not guild_db:
-        return JSONResponse(
-            status_code=404,
-            content={"detail": "Guild not found"}
-        )
-
-    if not user_is_officer(current_user, guild_db, db):
-        return JSONResponse(
-            status_code=403,
-            content={
-                "detail": "You don't have permission to create rosters in this guild",
-                "error_code": "INSUFFICIENT_GUILD_RANK"
-            }
-        )
-
-    if not roster_data.size or not (10 <= roster_data.size <= 60):
-        raise HTTPException(status_code=400, detail="Roster size must be between 10 and 60")
-
-    new_roster = Roster(
-        name=roster_data.name,
-        size=roster_data.size,
-        guild_id=guild_db.id
-    )
-
-    try:
-        db.add(new_roster)
-        db.commit()
-        db.refresh(new_roster)
-
-        if roster_data.characters:
-            for char_info in roster_data.characters:
-                character = db.exec(
-                    select(Character).where(Character.id == char_info.character_id)
-                ).first()
-                
-                if not character:
-                    db.rollback()
-                    raise HTTPException(
-                        status_code=404, 
-                        detail=f"Character with id {char_info.character_id} not found"
-                    )
-
-                new_association = RosterCharacter(
-                    roster_id=new_roster.id,
-                    character_id=char_info.character_id,
-                    role=char_info.role,
-                    status=char_info.status
-                )
-                db.add(new_association)
-            
-            db.commit()
-            db.refresh(new_roster)
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error creating roster: {str(e)}")
-
-    return 200
-
-@router.put("/guild/{realm}/{guild}/{roster_id}")
-async def update_roster(
-    realm: str,
-    guild: str,
-    roster_id: int,
-    update_data: RosterUpdateRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    roster = get_roster_with_checks(realm, guild, roster_id, current_user, db)
-    if not roster:
-        return JSONResponse(
-            status_code=404,
-            content={"detail": "Roster not found or insufficient permissions"}
-        )
-
-    if update_data.name is not None:
-        roster.name = update_data.name
-    if update_data.size is not None:
-        if not (10 <= update_data.size <= 60):
-            raise HTTPException(status_code=400, detail="Roster size must be between 10 and 60")
-        roster.size = update_data.size
-
-    if update_data.characters is not None:
-        for rc in roster.roster_characters:
-            db.delete(rc)
-        roster.roster_characters = []
-
-        for char_info in update_data.characters:
-            character = db.exec(
-                select(Character).where(Character.id == char_info.character_id)
-            ).first()
-            
-            if not character:
-                raise HTTPException(
-                    status_code=404, 
-                    detail=f"Character with id {char_info.character_id} not found"
-                )
-
-            new_association = RosterCharacter(
-                roster_id=roster.id,
-                character_id=char_info.character_id,
-                role=char_info.role,
-                status=char_info.status
-            )
-            roster.roster_characters.append(new_association)
-
-    try:
-        db.add(roster)
-        db.commit()
-        db.refresh(roster)
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error updating roster: {str(e)}")
-
-    return prepare_roster_response(roster)
-
-@router.delete("/guild/{realm}/{guild}/{roster_id}")
-async def delete_roster(
-    realm: str,
-    guild: str,
-    roster_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    roster = get_roster_with_checks(realm, guild, roster_id, current_user, db)
-    if not roster:
-        return JSONResponse(
-            status_code=404,
-            content={"detail": "Roster not found or insufficient permissions"}
-        )
-
-    try:
-        for rc in roster.roster_characters:
-            db.delete(rc)
-        
-        db.delete(roster)
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error deleting roster: {str(e)}")
-
-    return {"message": f"Roster '{roster.name}' successfully deleted"}

@@ -9,7 +9,7 @@ from auth import get_current_user
 from .roster import user_is_officer
 from database import get_db
 from models import User, Guild, Character
-from core import bliz
+from core.bliz import get_blizzard_client, BlizzardAPIClient
 from core.log import log
 
 router = APIRouter(tags=["guild"])
@@ -20,6 +20,7 @@ def slugify_realm(realm: str) -> str:
 @router.get("/realms")
 async def get_realm_index(
     current_user: User | None = Depends(get_current_user),
+    bliz: BlizzardAPIClient = Depends(get_blizzard_client)
 ):
     if not current_user:
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
@@ -42,7 +43,8 @@ async def get_guild_data(
     realm: str,
     guild: str,
     current_user: User | None = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    bliz: BlizzardAPIClient = Depends(get_blizzard_client)
 ):
     if not current_user:
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
@@ -64,7 +66,6 @@ async def get_guild_data(
     race_dict = dict([(race["id"], race["name"]) for race in race_index["races"]])
     class_dict = dict([(playable_class["id"], playable_class["name"]) for playable_class in class_index["classes"]])
     realm_dict = dict([(realm["id"], realm["name"]) for realm in realm_index["realms"]])
-    # log.info(realm_dict)
 
     # Slugify guild names
     for r in realm_dict:

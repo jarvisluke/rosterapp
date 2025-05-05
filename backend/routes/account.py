@@ -1,16 +1,19 @@
 import aiohttp
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Request, Response, Depends
 from fastapi.responses import JSONResponse
 
 from auth import create_access_token
 from database import get_or_create_user
-from core import bliz
+from core.bliz import get_blizzard_client, BlizzardAPIClient
 from core.log import log
 
 router = APIRouter(tags=["auth"])
 
 @router.get("/login-url")
-async def get_login_url(response: Response):
+async def get_login_url(
+    response: Response,
+    bliz: BlizzardAPIClient = Depends(get_blizzard_client)
+):
     state = bliz.get_state()
     AUTH_URL = (
         f"https://us.battle.net/oauth/authorize?"
@@ -39,7 +42,13 @@ async def logout():
     return response
 
 @router.get("/callback")
-async def oauth_callback(request: Request, code: str, state: str, response: Response):
+async def oauth_callback(
+    request: Request, 
+    code: str, 
+    state: str, 
+    response: Response,
+    bliz: BlizzardAPIClient = Depends(get_blizzard_client)
+):
     stored_state = request.cookies.get("oauth_state")
     if not stored_state or stored_state != state:
         return JSONResponse(

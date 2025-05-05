@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 from auth import get_current_user
 from database import get_db
 from models import User, Character
-from core import bliz
+from core.bliz import get_blizzard_client, BlizzardAPIClient
 
 router = APIRouter(tags=["user"])
 
@@ -24,7 +24,8 @@ async def get_account_info(current_user: User | None = Depends(get_current_user)
 @router.get("/wow-profile")
 async def get_wow_profile_data(
     current_user: User | None = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    bliz: BlizzardAPIClient = Depends(get_blizzard_client)
 ):
     if not current_user:
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})

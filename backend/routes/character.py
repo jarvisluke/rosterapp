@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 from auth import get_current_user
 from database import get_db
 from models import User, Character
-from core import bliz
+from core.bliz import get_blizzard_client, BlizzardAPIClient
 
 router = APIRouter(tags=["character"])
 
@@ -17,7 +17,8 @@ async def get_character_data(
     realm: str,
     character: str,
     current_user: User | None = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    bliz: BlizzardAPIClient = Depends(get_blizzard_client)
 ):
     if not current_user:
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
@@ -25,13 +26,11 @@ async def get_character_data(
     access_token = current_user.api_token
     
     profile, equipment, character_media, mythic_keystone_profile, raid_progression = await asyncio.gather(
-        *[func(access_token, realm, character) for func in [
-            bliz.get_character_profile, 
-            bliz.get_character_equipment, 
-            bliz.get_character_media, 
-            bliz.get_mythic_keystone_profile, 
-            bliz.get_raid_progression
-        ]]
+        bliz.get_character_profile(access_token, realm, character),
+        bliz.get_character_equipment(access_token, realm, character),
+        bliz.get_character_media(access_token, realm, character),
+        bliz.get_mythic_keystone_profile(access_token, realm, character),
+        bliz.get_raid_progression(access_token, realm, character)
     )
     
     if not profile:
@@ -87,7 +86,8 @@ async def get_character_data(
 async def get_character_equipment(
     realm: str,
     character: str,
-    current_user: User | None = Depends(get_current_user)
+    current_user: User | None = Depends(get_current_user),
+    bliz: BlizzardAPIClient = Depends(get_blizzard_client)
 ):
     if not current_user:
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})

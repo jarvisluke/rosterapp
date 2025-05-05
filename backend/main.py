@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from models import create_db_and_tables
+from core.bliz import BlizzardAPIClient
 from routes import (
     account, 
     user, 
@@ -16,8 +17,19 @@ from routes import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """FastAPI lifespan events for startup and shutdown."""
+    # Startup: Create database tables and initialize BlizzardAPIClient
     create_db_and_tables()
-    yield
+    
+    # Create a single BlizzardAPIClient instance that will be shared
+    # across all requests during the application lifetime
+    app.state.blizzard_client = BlizzardAPIClient()
+    
+    yield  # Application is running
+    
+    # Shutdown: Clean up resources
+    # Close the aiohttp session properly to avoid warnings
+    await app.state.blizzard_client.close()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -38,4 +50,3 @@ app.include_router(guild.router, prefix="/api")
 app.include_router(roster.router, prefix="/api")
 app.include_router(item.router, prefix="/api")
 app.include_router(simc.router, prefix="/api")
-[app.include_router(i.router, prefix="/api") for i in [account, user, character, guild, roster, item]]

@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 
 from auth import get_current_user
 from models import User
-from core import bliz
+from core.bliz import get_blizzard_client, BlizzardAPIClient
 
 router = APIRouter(tags=["item"])
 
@@ -14,6 +14,7 @@ router = APIRouter(tags=["item"])
 async def get_item_media(
     media_urls: List[str] = Body(...),
     current_user: User | None = Depends(get_current_user),
+    bliz: BlizzardAPIClient = Depends(get_blizzard_client)
 ):
     if not current_user:
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
