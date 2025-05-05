@@ -1,11 +1,11 @@
 import uuid
 import dotenv
 import os
-import subprocess
+import asyncio
 from datetime import datetime
 from typing import Optional
 
-from .cache import cache_simc_result
+from core.cache import cache_simc_result
 
 dotenv.load_dotenv()
 
@@ -33,14 +33,32 @@ class SimcClient:
         command = [simc, input_file, f"html={output_file}"]
 
         try:
-            subprocess.run(args=command, capture_output=True)
+            # Run subprocess asynchronously
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode != 0:
+                error_message = stderr.decode() if stderr else 'No error message provided'
+                raise Exception(f"SimC exited with code {process.returncode}: {error_message}")
+                
+            # Check if output file was created
+            if not os.path.exists(output_file):
+                raise Exception(f"SimC did not create output file: {output_file}")
+                
             return output_file
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             # Handle simulation errors
             error_file = f"{self.simulations_dir}/error_{timestamp}_{unique_id}.txt"
             with open(error_file, 'w') as f:
                 f.write(f"Command: {' '.join(command)}\n")
-                f.write(f"Error: {e.stderr}")
-            return error_file
+                f.write(f"Error: {str(e)}")
+            # Raise error instead of returning error file for proper error handling
+            raise e
         finally:
-            os.remove(input_file)
+            # Clean up input file
+            if os.path.exists(input_file):
+                os.remove(input_file)

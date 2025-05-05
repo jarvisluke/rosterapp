@@ -2,9 +2,11 @@ from datetime import datetime, timedelta
 import json
 import redis
 from functools import wraps
+import asyncio
 from enum import Enum
 import os
 import dotenv
+import hashlib
 
 dotenv.load_dotenv()
 
@@ -44,6 +46,10 @@ def create_cache_key(func_name, args, kwargs):
     kwargs_str = ':'.join(f"{k}={v if not isinstance(v, dict) else json.dumps(v, sort_keys=True)}" 
                          for k, v in sorted(kwargs.items()))
     return f"{func_name}:{args_str}:{kwargs_str}"
+
+def create_simc_cache_key(input_text):
+    """Create a hash key for SimC input text"""
+    return f"simc:{hashlib.md5(input_text.encode()).hexdigest()}"
 
 def cache_api_response(func):
     @wraps(func)
@@ -94,21 +100,27 @@ def cache_api_response(func):
 def cache_simc_result(func):
     @wraps(func)
     async def wrapper(self, input: str):
+        cache_key = create_simc_cache_key(input)
+        
         try:
             # Check cache first
-            cached_result = redis_client.get(input)
+            cached_result = redis_client.get(cache_key)
             if cached_result:
                 if os.path.exists(cached_result):
                     return cached_result
 
             # If not in cache or file doesn't exist, run simulation
-            output_file = await func(self, input)
+            # Properly handle both sync and async calls
+            if asyncio.iscoroutinefunction(func):
+                output_file = await func(self, input)
+            else:
+                output_file = func(self, input)
             
             # Cache the successful simulation
             if output_file and os.path.exists(output_file):
                 redis_client.setex(
-                    input,
-                    CACHE_EXPIRY[CacheType.SIMC].total_seconds(),
+                    cache_key,
+                    int(CACHE_EXPIRY[CacheType.SIMC].total_seconds()),
                     output_file
                 )
             
@@ -116,6 +128,9 @@ def cache_simc_result(func):
             
         except redis.RedisError:
             # If Redis fails, just run the simulation without caching
-            return await func(self, input)
+            if asyncio.iscoroutinefunction(func):
+                return await func(self, input)
+            else:
+                return func(self, input)
     
     return wrapper

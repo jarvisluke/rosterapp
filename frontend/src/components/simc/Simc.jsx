@@ -18,6 +18,7 @@ import CharacterDisplay from './CharacterDisplay';
 import SimulationReport from './SimulationReport';
 import CombinationsDisplay from './CombinationsDisplay';
 import AdditionalOptions from './AdditionalOptions';
+import AsyncSimulationDisplay from './AsyncSimulationDisplay';
 
 const pairedSlots = {
   main_hand: 'off_hand',
@@ -55,7 +56,9 @@ const SIMULATION_ACTIONS = {
   UPDATE_COMBINATIONS: 'UPDATE_COMBINATIONS',
   UPDATE_SIM_OPTIONS: 'UPDATE_SIM_OPTIONS',
   UPDATE_SIM_RESULT: 'UPDATE_SIM_RESULT',
-  SET_SIMULATING: 'SET_SIMULATING'
+  SET_SIMULATING: 'SET_SIMULATING',
+  SET_ACTIVE_JOB: 'SET_ACTIVE_JOB'
+
 };
 
 const simulationReducer = (state, action) => {
@@ -70,6 +73,8 @@ const simulationReducer = (state, action) => {
       return { ...state, simulationResult: action.payload };
     case SIMULATION_ACTIONS.SET_SIMULATING:
       return { ...state, isSimulating: action.payload };
+    case SIMULATION_ACTIONS.SET_ACTIVE_JOB:
+      return { ...state, activeJob: action.payload };
     default:
       return state;
   }
@@ -95,7 +100,9 @@ const initialSimulationState = {
     powerInfusion: false
   },
   simulationResult: null,
-  isSimulating: false
+  isSimulating: false,
+  activeJob: null
+
 };
 
 // Create context
@@ -217,10 +224,6 @@ function Simc() {
   const [realmIndex, setRealmIndex] = useState(null);
   const simulationResultRef = useRef(null);
   const [simulationState, dispatch] = useReducer(simulationReducer, initialSimulationState);
-  const [jobId, setJobId] = useState(null);
-  const [jobStatus, setJobStatus] = useState(null);
-  const [queueStatus, setQueueStatus] = useState(null);
-  const statusCheckIntervalRef = useRef(null);
 
   useEffect(() => {
     const fetchRealms = async () => {
@@ -234,116 +237,6 @@ function Simc() {
 
     fetchRealms();
   }, []);
-
-  // Test that async routes and worker are functioning
-  useEffect(() => {
-    const testAsyncRoutes = async () => {
-      try {
-        const queueStatusResponse = await fetch('/api/simulate/queue/status');
-        if (queueStatusResponse.ok) {
-          const queueData = await queueStatusResponse.json();
-          console.log('Queue status working:', queueData);
-        } else {
-          console.error('Queue status endpoint not working');
-        }
-      } catch (error) {
-        console.error('Error testing async routes:', error);
-      }
-    };
-
-    testAsyncRoutes();
-  }, []);
-
-  useEffect(() => {
-    // Clean up status check interval when component unmounts
-    return () => {
-      if (statusCheckIntervalRef.current) {
-        clearInterval(statusCheckIntervalRef.current);
-      }
-    };
-  }, []);
-
-  // Poll job status when jobId exists
-  useEffect(() => {
-    if (!jobId) return;
-
-    const checkStatus = async () => {
-      try {
-        const response = await fetch(`/api/simulate/status/${jobId}`);
-        if (!response.ok) {
-          throw new Error('Failed to get job status');
-        }
-        const status = await response.json();
-        setJobStatus(status);
-
-        // When complete, fetch result and clear interval
-        if (status.status === 'COMPLETED') {
-          clearInterval(statusCheckIntervalRef.current);
-          fetchSimulationResult(jobId);
-        } else if (status.status === 'FAILED') {
-          clearInterval(statusCheckIntervalRef.current);
-          alert(`Simulation failed: ${status.error || 'Unknown error'}`);
-          dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
-        }
-      } catch (error) {
-        console.error('Error checking job status:', error);
-      }
-    };
-
-    // Start polling
-    checkStatus();
-    statusCheckIntervalRef.current = setInterval(checkStatus, 3000);
-
-    return () => {
-      clearInterval(statusCheckIntervalRef.current);
-    };
-  }, [jobId]);
-
-  // Fetch queue status periodically while simulating
-  useEffect(() => {
-    if (!simulationState.isSimulating) {
-      setQueueStatus(null);
-      return;
-    }
-
-    const fetchQueueStatus = async () => {
-      try {
-        const response = await fetch('/api/simulate/queue/status');
-        if (response.ok) {
-          const status = await response.json();
-          setQueueStatus(status);
-        }
-      } catch (error) {
-        console.error('Error fetching queue status:', error);
-      }
-    };
-
-    fetchQueueStatus();
-    const interval = setInterval(fetchQueueStatus, 10000);
-
-    return () => clearInterval(interval);
-  }, [simulationState.isSimulating]);
-
-  const fetchSimulationResult = async (id) => {
-    try {
-      const response = await fetch(`/api/simulate/result/${id}`);
-      if (!response.ok) {
-        throw new Error(`Error: ${response.statusText}`);
-      }
-
-      const htmlContent = await response.text();
-      dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_RESULT, payload: htmlContent });
-      dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
-
-      if (simulationResultRef.current) {
-        simulationResultRef.current.scrollIntoView({ behavior: 'smooth' });
-      }
-    } catch (error) {
-      console.error('Error fetching simulation result:', error);
-      alert('Failed to retrieve simulation result: ' + error.message);
-      dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
-    }
-  };
 
   const handleDataUpdate = useCallback((data) => {
     if (data) {
@@ -557,8 +450,6 @@ function Simc() {
     if (!simulationState.characterData) return;
 
     dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: true });
-    setJobId(null);
-    setJobStatus(null);
 
     try {
       let input;
@@ -591,7 +482,6 @@ function Simc() {
 
       const base64Input = btoa(input);
 
-      // Use async endpoint instead
       const response = await fetch('/api/simulate/async', {
         method: 'POST',
         headers: {
@@ -604,72 +494,50 @@ function Simc() {
         throw new Error(`Error: ${response.statusText}`);
       }
 
-      const result = await response.json();
-      setJobId(result.job_id);
-      setJobStatus(result);
-      console.log("Job queued:", result);
+      const jobData = await response.json();
+      dispatch({
+        type: SIMULATION_ACTIONS.SET_ACTIVE_JOB,
+        payload: jobData.job_id
+      });
 
     } catch (error) {
       console.error('Simulation error:', error);
-      alert('Failed to run simulation: ' + error.message);
+      alert('Failed to start simulation: ' + error.message);
       dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
     }
   }, [simulationState, inputMode, formatCombinations, extractCharacterInfo, addSimulationOptions]);
 
-  // Render queue position/status when simulating
-  const renderSimulationStatus = () => {
-    if (!simulationState.isSimulating) return null;
+  const downloadReport = useCallback(() => {
+    if (!simulationState.simulationResult) return;
 
-    let statusMessage = 'Preparing simulation...';
-    let estimatedTime = null;
-
-    if (jobStatus) {
-      if (jobStatus.status === 'QUEUED') {
-        statusMessage = `Position in queue: ${jobStatus.queue_position}`;
-        estimatedTime = jobStatus.estimated_wait;
-      } else if (jobStatus.status === 'PROCESSING') {
-        statusMessage = 'Simulation in progress...';
-        estimatedTime = jobStatus.estimated_wait || 30;
-      }
-    }
-
-    return (
-      <div className="alert alert-info mt-3">
-        <h5>Simulation Status</h5>
-        <div className="d-flex align-items-center">
-          <div className="spinner-border spinner-border-sm me-2" role="status"></div>
-          <div>{statusMessage}</div>
-        </div>
-        {estimatedTime && (
-          <div className="small mt-2">
-            Estimated time remaining: {Math.round(estimatedTime)} seconds
-          </div>
-        )}
-        {queueStatus && (
-          <div className="small mt-2">
-            <div>Active jobs: {queueStatus.active_jobs}</div>
-            <div>Queue length: {queueStatus.queue_length}</div>
-            <div>Average job duration: {Math.round(queueStatus.avg_job_duration)} seconds</div>
-          </div>
-        )}
-      </div>
-    );
-  };
+    const blob = new Blob([simulationState.simulationResult], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${simulationState.characterData?.name || 'character'}_sim_report.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [simulationState.simulationResult, simulationState.characterData]);
 
   return (
     <SimulationContext.Provider value={simulationState}>
       <SimulationDispatchContext.Provider value={dispatch}>
         <div className="container mt-3 pb-5 mb-5">
-          {simulationState.simulationResult && (
-            <div ref={simulationResultRef}>
-              <SimulationResults
-                result={simulationState.simulationResult}
-                downloadReport={downloadReport}
-              />
-            </div>
+          {simulationState.activeJob && (
+            <AsyncSimulationDisplay
+              jobId={simulationState.activeJob}
+              onClose={() => {
+                dispatch({ type: SIMULATION_ACTIONS.SET_ACTIVE_JOB, payload: null });
+                dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
+              }}
+              onComplete={(result) => {
+                dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_RESULT, payload: result });
+                dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
+              }}
+            />
           )}
-
-          {renderSimulationStatus()}
 
           <div className="mb-2">
             <input

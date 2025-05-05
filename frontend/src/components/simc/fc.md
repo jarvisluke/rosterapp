@@ -1,6 +1,237 @@
+`AsyncSimulationDisplay.jsx`
+```jsx
+import { useState, useEffect, useCallback } from 'react';
+import SimulationReport from './SimulationReport';
+
+function AsyncSimulationDisplay({ jobId, onClose, onComplete }) {
+  const [status, setStatus] = useState(null);
+  const [queuePosition, setQueuePosition] = useState(null);
+  const [estimatedWait, setEstimatedWait] = useState(null);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+
+  const checkStatus = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/simulate/status/${jobId}`);
+      if (!response.ok) {
+        throw new Error('Failed to get status');
+      }
+      const data = await response.json();
+      setStatus(data.status);
+      setQueuePosition(data.queue_position);
+      setEstimatedWait(data.estimated_wait);
+
+      if (data.status === 'COMPLETED') {
+        // Fetch result
+        const resultResponse = await fetch(`/api/simulate/result/${jobId}`);
+        if (!resultResponse.ok) {
+          throw new Error('Failed to get result');
+        }
+        const resultContent = await resultResponse.text();
+        setResult(resultContent);
+        onComplete(resultContent);
+      } else if (data.status === 'FAILED') {
+        setError(data.error || 'Simulation failed');
+      }
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [jobId, onComplete]);
+
+  useEffect(() => {
+    let intervalId;
+    
+    if (status !== 'COMPLETED' && status !== 'FAILED' && !error) {
+      // Start checking status immediately
+      checkStatus();
+      
+      // Then check every 5 seconds
+      intervalId = setInterval(checkStatus, 5000);
+    }
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [status, error, checkStatus]);
+
+  const formatWaitTime = (seconds) => {
+    if (seconds < 60) {
+      return `${seconds} seconds`;
+    } else if (seconds < 3600) {
+      const minutes = Math.floor(seconds / 60);
+      return `${minutes} minute${minutes !== 1 ? 's' : ''}`;
+    } else {
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      return `${hours} hour${hours !== 1 ? 's' : ''} ${minutes} minute${minutes !== 1 ? 's' : ''}`;
+    }
+  };
+
+  if (error) {
+    return (
+      <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+        <div className="modal-dialog modal-dialog-centered">
+          <div className="modal-content">
+            <div className="modal-header bg-danger text-white">
+              <h5 className="modal-title">Simulation Error</h5>
+              <button type="button" className="btn-close" onClick={onClose}></button>
+            </div>
+            <div className="modal-body">
+              <p className="text-danger">{error}</p>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={onClose}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === 'COMPLETED' && result) {
+    return (
+      <SimulationReport 
+        htmlContent={result}
+        onClose={onClose}
+        jobId={jobId}
+      />
+    );
+  }
+
+  return (
+    <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+      <div className="modal-dialog modal-dialog-centered">
+        <div className="modal-content">
+          <div className="modal-header">
+            <h5 className="modal-title">Simulation in Progress</h5>
+            <button type="button" className="btn-close" onClick={onClose}></button>
+          </div>
+          <div className="modal-body text-center">
+            <div className="mb-3">
+              <div className="spinner-border text-primary" role="status">
+                <span className="visually-hidden">Loading...</span>
+              </div>
+            </div>
+            <h6>Status: {status}</h6>
+            {queuePosition > 0 && (
+              <p>Queue Position: {queuePosition}</p>
+            )}
+            {estimatedWait && (
+              <p>Estimated Wait: {formatWaitTime(estimatedWait)}</p>
+            )}
+            <small className="text-muted">
+              Job ID: {jobId}
+            </small>
+          </div>
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={onClose}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default AsyncSimulationDisplay;
+```
+
+`SimulationReport.jsx`
+```jsx
+function SimulationReport({ htmlContent, onClose, jobId, height = '500px' }) {
+    const downloadReport = () => {
+      const blob = new Blob([htmlContent], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `sim_report_${jobId || 'character'}.html`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    };
+  
+    if (onClose) {
+      // Modal mode
+      return (
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <div className="modal-dialog modal-xl modal-dialog-centered">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">Simulation Results</h5>
+                <button type="button" className="btn-close" onClick={onClose}></button>
+              </div>
+              <div className="modal-body p-0">
+                <div style={{ height: '70vh', overflow: 'auto' }}>
+                  <iframe
+                    srcDoc={htmlContent}
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      border: 'none'
+                    }}
+                    title="Simulation Report"
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button 
+                  type="button" 
+                  className="btn btn-secondary"
+                  onClick={downloadReport}
+                >
+                  Download Report
+                </button>
+                <button type="button" className="btn btn-primary" onClick={onClose}>
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    } else {
+      // Inline mode
+      return (
+        <div
+          className="border rounded bg-light"
+          style={{ height: height, overflow: 'auto' }}
+        >
+          <iframe
+            srcDoc={htmlContent}
+            style={{
+              width: '100%',
+              height: '100%',
+              border: 'none'
+            }}
+            title="Simulation Report"
+          />
+        </div>
+      );
+    }
+  }
+  
+  export default SimulationReport;
+```
+
 `Simc.jsx`
 ```jsx
-import { useEffect, useRef, useState, useMemo, useCallback, createContext, useContext, useReducer, memo } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  useMemo,
+  useCallback,
+  createContext,
+  useContext,
+  useReducer,
+  memo
+} from 'react';
 import AddonInput from './AddonInput';
 import ArmoryInput from './ArmoryInput';
 import ItemSelect from './ItemSelect';
@@ -10,6 +241,7 @@ import CharacterDisplay from './CharacterDisplay';
 import SimulationReport from './SimulationReport';
 import CombinationsDisplay from './CombinationsDisplay';
 import AdditionalOptions from './AdditionalOptions';
+import AsyncSimulationDisplay from './AsyncSimulationDisplay';
 
 const pairedSlots = {
   main_hand: 'off_hand',
@@ -47,7 +279,9 @@ const SIMULATION_ACTIONS = {
   UPDATE_COMBINATIONS: 'UPDATE_COMBINATIONS',
   UPDATE_SIM_OPTIONS: 'UPDATE_SIM_OPTIONS',
   UPDATE_SIM_RESULT: 'UPDATE_SIM_RESULT',
-  SET_SIMULATING: 'SET_SIMULATING'
+  SET_SIMULATING: 'SET_SIMULATING',
+  SET_ACTIVE_JOB: 'SET_ACTIVE_JOB'
+
 };
 
 const simulationReducer = (state, action) => {
@@ -62,6 +296,8 @@ const simulationReducer = (state, action) => {
       return { ...state, simulationResult: action.payload };
     case SIMULATION_ACTIONS.SET_SIMULATING:
       return { ...state, isSimulating: action.payload };
+    case SIMULATION_ACTIONS.SET_ACTIVE_JOB:
+      return { ...state, activeJob: action.payload };
     default:
       return state;
   }
@@ -87,7 +323,9 @@ const initialSimulationState = {
     powerInfusion: false
   },
   simulationResult: null,
-  isSimulating: false
+  isSimulating: false,
+  activeJob: null
+
 };
 
 // Create context
@@ -115,7 +353,7 @@ const MemoizedAdditionalOptions = memo(({ options, onChange }) => {
 // Isolated EquipmentSection component
 const EquipmentSection = memo(({ itemsData }) => {
   const dispatch = useSimulationDispatch();
-  
+
   const preparedItems = useMemo(() => {
     if (!itemsData) return [];
 
@@ -286,7 +524,7 @@ function Simc() {
   const extractCharacterInfo = useCallback((simcInput) => {
     const charInfo = [];
     const lines = simcInput.split('\n');
-    
+
     let detectedClass = '';
     for (const line of lines) {
       if (line.startsWith('spec=')) {
@@ -300,7 +538,7 @@ function Simc() {
         break;
       }
     }
-    
+
     let characterName = 'Character';
     const commentLine = lines.find(line => line.startsWith('#'));
     if (commentLine) {
@@ -309,7 +547,7 @@ function Simc() {
         characterName = match[1];
       }
     }
-    
+
     if (detectedClass) {
       charInfo.push(`${detectedClass}="${characterName}"`);
     } else {
@@ -358,12 +596,12 @@ function Simc() {
 
   const addSimulationOptions = useCallback((inputText, simOptions) => {
     let options = [];
-    
+
     options.push(`max_time=${simOptions.fightDuration}`);
-    
+
     if (!simOptions.optimalRaidBuffs) {
       options.push('optimal_raid=0');
-      
+
       options.push(`override.bloodlust=${simOptions.bloodlust ? 1 : 0}`);
       options.push(`override.arcane_intellect=${simOptions.arcaneIntellect ? 1 : 0}`);
       options.push(`override.battle_shout=${simOptions.battleShout ? 1 : 0}`);
@@ -374,9 +612,9 @@ function Simc() {
       options.push(`override.skyfury=${simOptions.skyfury ? 1 : 0}`);
       options.push(`override.hunters_mark=${simOptions.huntersMark ? 1 : 0}`);
     }
-    
+
     options.push(`external_buffs.power_infusion=${simOptions.powerInfusion ? 1 : 0}`);
-    
+
     return `${inputText}\n\n# Simulation Options\n${options.join('\n')}`;
   }, []);
 
@@ -445,16 +683,16 @@ function Simc() {
         } else {
           const lines = simulationState.simcInput.split('\n').filter(line => !line.startsWith('Simulation input:'));
           const characterInfo = extractCharacterInfo(simulationState.simcInput);
-          
+
           const remainingLines = lines.filter(line => {
             if (line.startsWith('#') || line.startsWith('//')) return true;
-            if (['level=', 'race=', 'region=', 'server=', 'role=', 'professions=', 
-                'spec=', 'talents=', 'covenant=', 'soulbind='].some(s => line.startsWith(s))) {
+            if (['level=', 'race=', 'region=', 'server=', 'role=', 'professions=',
+              'spec=', 'talents=', 'covenant=', 'soulbind='].some(s => line.startsWith(s))) {
               return false;
             }
             return true;
           });
-          
+
           input = characterInfo + '\n\n' + remainingLines.join('\n');
           input = addSimulationOptions(input, simulationState.simOptions);
         }
@@ -467,7 +705,7 @@ function Simc() {
 
       const base64Input = btoa(input);
 
-      const response = await fetch('/api/simulate', {
+      const response = await fetch('/api/simulate/async', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -479,16 +717,15 @@ function Simc() {
         throw new Error(`Error: ${response.statusText}`);
       }
 
-      const htmlContent = await response.text();
-      dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_RESULT, payload: htmlContent });
+      const jobData = await response.json();
+      dispatch({
+        type: SIMULATION_ACTIONS.SET_ACTIVE_JOB,
+        payload: jobData.job_id
+      });
 
-      if (simulationResultRef.current) {
-        simulationResultRef.current.scrollIntoView({ behavior: 'smooth' });
-      }
     } catch (error) {
       console.error('Simulation error:', error);
-      alert('Failed to run simulation: ' + error.message);
-    } finally {
+      alert('Failed to start simulation: ' + error.message);
       dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
     }
   }, [simulationState, inputMode, formatCombinations, extractCharacterInfo, addSimulationOptions]);
@@ -511,13 +748,18 @@ function Simc() {
     <SimulationContext.Provider value={simulationState}>
       <SimulationDispatchContext.Provider value={dispatch}>
         <div className="container mt-3 pb-5 mb-5">
-          {simulationState.simulationResult && (
-            <div ref={simulationResultRef}>
-              <SimulationResults 
-                result={simulationState.simulationResult}
-                downloadReport={downloadReport}
-              />
-            </div>
+          {simulationState.activeJob && (
+            <AsyncSimulationDisplay
+              jobId={simulationState.activeJob}
+              onClose={() => {
+                dispatch({ type: SIMULATION_ACTIONS.SET_ACTIVE_JOB, payload: null });
+                dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
+              }}
+              onComplete={(result) => {
+                dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_RESULT, payload: result });
+                dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
+              }}
+            />
           )}
 
           <div className="mb-2">
@@ -579,7 +821,7 @@ function Simc() {
 
           {simulationState.characterData && (
             <CollapsibleSection title="Additional Options">
-              <MemoizedAdditionalOptions 
+              <MemoizedAdditionalOptions
                 options={simulationState.simOptions}
                 onChange={handleOptionsChange}
               />
@@ -587,14 +829,14 @@ function Simc() {
           )}
 
           {simulationState.characterData && (
-            <CombinationsSection 
+            <CombinationsSection
               combinations={simulationState.combinations}
               characterData={simulationState.characterData}
               itemsData={simulationState.itemsData}
             />
           )}
 
-          <SimulationButton 
+          <SimulationButton
             canSimulate={canSimulate}
             isSimulating={simulationState.isSimulating}
             onRun={runSimulation}
@@ -608,27 +850,39 @@ function Simc() {
 export default Simc;
 ```
 
-`SimulationReport.jsx`
+`CollapsibleSection.jsx`
 ```jsx
-function SimulationReport({ htmlContent, height = '500px' }) {
-    return (
-        <div
-            className="border rounded bg-light"
-            style={{ height: height, overflow: 'auto' }}
-        >
-            <iframe
-                srcDoc={htmlContent}
-                style={{
-                    width: '100%',
-                    height: '100%',
-                    border: 'none'
-                }}
-                title="Simulation Report"
-            />
+import { useState } from "react";
+
+function CollapsibleSection({ title, children, initialExpanded = true }) {
+  const [isExpanded, setIsExpanded] = useState(initialExpanded);
+
+  return (
+    <div className="mb-4">
+      <div
+        className="d-flex justify-content-between align-items-center p-2 border-bottom"
+        style={{ cursor: 'pointer' }}
+        onClick={() => setIsExpanded(!isExpanded)}
+      >
+        <h5 className="m-1">{title}</h5>
+        <i className={`bi ${isExpanded ? 'bi-chevron-up' : 'bi-chevron-down'}`}></i>
+      </div>
+      <div
+        className="overflow-hidden"
+        style={{
+          maxHeight: isExpanded ? '2000px' : '0',
+          opacity: isExpanded ? 1 : 0,
+          transition: `max-height 0.5s ease-in-out, opacity ${isExpanded ? '0.5s' : '0.3s'} ease-in-out`
+        }}
+      >
+        <div className="pt-3">
+          {children}
         </div>
-    );
+      </div>
+    </div>
+  );
 }
 
-export default SimulationReport
+export default CollapsibleSection
 ```
 
