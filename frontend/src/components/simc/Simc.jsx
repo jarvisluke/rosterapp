@@ -18,7 +18,7 @@ import CharacterDisplay from './CharacterDisplay';
 import SimulationReport from './SimulationReport';
 import CombinationsDisplay from './CombinationsDisplay';
 import AdditionalOptions from './AdditionalOptions';
-import AsyncSimulationDisplay from './AsyncSimulationDisplay';
+import StreamingSimulationDisplay from './StreamingSimulationDisplay';
 
 const pairedSlots = {
   main_hand: 'off_hand',
@@ -56,9 +56,7 @@ const SIMULATION_ACTIONS = {
   UPDATE_COMBINATIONS: 'UPDATE_COMBINATIONS',
   UPDATE_SIM_OPTIONS: 'UPDATE_SIM_OPTIONS',
   UPDATE_SIM_RESULT: 'UPDATE_SIM_RESULT',
-  SET_SIMULATING: 'SET_SIMULATING',
-  SET_ACTIVE_JOB: 'SET_ACTIVE_JOB'
-
+  SET_SIMULATING: 'SET_SIMULATING'
 };
 
 const simulationReducer = (state, action) => {
@@ -73,8 +71,6 @@ const simulationReducer = (state, action) => {
       return { ...state, simulationResult: action.payload };
     case SIMULATION_ACTIONS.SET_SIMULATING:
       return { ...state, isSimulating: action.payload };
-    case SIMULATION_ACTIONS.SET_ACTIVE_JOB:
-      return { ...state, activeJob: action.payload };
     default:
       return state;
   }
@@ -100,9 +96,7 @@ const initialSimulationState = {
     powerInfusion: false
   },
   simulationResult: null,
-  isSimulating: false,
-  activeJob: null
-
+  isSimulating: false
 };
 
 // Create context
@@ -224,6 +218,7 @@ function Simc() {
   const [realmIndex, setRealmIndex] = useState(null);
   const simulationResultRef = useRef(null);
   const [simulationState, dispatch] = useReducer(simulationReducer, initialSimulationState);
+  const [simulationInputText, setSimulationInputText] = useState(null);
 
   useEffect(() => {
     const fetchRealms = async () => {
@@ -444,9 +439,9 @@ function Simc() {
     });
 
     return addSimulationOptions(combinationsText, simulationState.simOptions);
-  }, [extractCharacterInfo, createEquippedCombination, formatItemForSimC, addSimulationOptions]);
+  }, [extractCharacterInfo, createEquippedCombination, formatItemForSimC, addSimulationOptions, simulationState.simOptions]);
 
-  const runSimulation = useCallback(async () => {
+  const runSimulation = useCallback(() => {
     if (!simulationState.characterData) return;
 
     dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: true });
@@ -479,26 +474,9 @@ function Simc() {
       }
 
       console.log("Simulation input:", input);
-
-      const base64Input = btoa(input);
-
-      const response = await fetch('/api/simulate/async', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ simc_input: base64Input }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Error: ${response.statusText}`);
-      }
-
-      const jobData = await response.json();
-      dispatch({
-        type: SIMULATION_ACTIONS.SET_ACTIVE_JOB,
-        payload: jobData.job_id
-      });
+      
+      // Set the input text for the streaming component
+      setSimulationInputText(input);
 
     } catch (error) {
       console.error('Simulation error:', error);
@@ -525,15 +503,18 @@ function Simc() {
     <SimulationContext.Provider value={simulationState}>
       <SimulationDispatchContext.Provider value={dispatch}>
         <div className="container mt-3 pb-5 mb-5">
-          {simulationState.activeJob && (
-            <AsyncSimulationDisplay
-              jobId={simulationState.activeJob}
+          {simulationInputText && (
+            <StreamingSimulationDisplay
+              simulationInput={simulationInputText}
               onClose={() => {
-                dispatch({ type: SIMULATION_ACTIONS.SET_ACTIVE_JOB, payload: null });
+                setSimulationInputText(null);
                 dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
               }}
               onComplete={(result) => {
-                dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_RESULT, payload: result });
+                if (result) {
+                  dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_RESULT, payload: result });
+                }
+                setSimulationInputText(null);
                 dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
               }}
             />
@@ -612,6 +593,11 @@ function Simc() {
               itemsData={simulationState.itemsData}
             />
           )}
+
+          <SimulationResults
+            result={simulationState.simulationResult}
+            downloadReport={downloadReport}
+          />
 
           <SimulationButton
             canSimulate={canSimulate}
