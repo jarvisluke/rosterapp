@@ -1,6 +1,6 @@
 from datetime import datetime
 from uuid import uuid4
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends, websockets
 from fastapi.responses import HTMLResponse, JSONResponse
 from base64 import b64decode
 import json
@@ -37,39 +37,71 @@ async def stream_simulation(
     simc_client: SimcClient = Depends(get_simc_client)
 ):
     """WebSocket endpoint for streaming simulation output"""
-    client_id = await websocket_manager.connect(websocket)
-    
+    client_id = None
     try:
+        client_id = await websocket_manager.connect(websocket)
+        print(f"Client {client_id} connected for simulation")
+        
         # Wait for simulation input
-        data = await websocket.receive_text()
-        message = json.loads(data)
+        try:
+            data = await websocket.receive_text()
+        except Exception as e:
+            print(f"Error receiving initial message: {e}")
+            await websocket_manager.send_message(client_id, {"type": "error", "content": f"Failed to receive input: {str(e)}"})
+            return
+            
+        try:
+            message = json.loads(data)
+        except json.JSONDecodeError as e:
+            print(f"JSON decode error: {e}")
+            await websocket_manager.send_message(client_id, {"type": "error", "content": f"Invalid JSON format: {str(e)}"})
+            return
         
         if "simc_input" not in message:
-            await websocket_manager.send_message(client_id, {"error": "simc_input required"})
+            await websocket_manager.send_message(client_id, {"type": "error", "content": "simc_input required"})
             return
             
         # Decode and start simulation
-        decoded_input = b64decode(message["simc_input"]).decode("utf-8")
+        try:
+            decoded_input = b64decode(message["simc_input"]).decode("utf-8")
+        except Exception as e:
+            print(f"Base64 decode error: {e}")
+            await websocket_manager.send_message(client_id, {"type": "error", "content": f"Failed to decode input: {str(e)}"})
+            return
+        
+        print(f"Starting simulation for client {client_id}")
         
         # Stream simulation output
-        async for output in simc_client.stream_simulation(decoded_input):
-            if not await websocket_manager.send_message(client_id, output):
-                # Client disconnected during streaming
-                break
+        try:
+            async for output in simc_client.stream_simulation(decoded_input):
+                print(f"Streaming output: {output.get('type')} - {output.get('content', '')[:50]}...")
+                success = await websocket_manager.send_message(client_id, output)
+                if not success:
+                    print(f"Failed to send message to {client_id}, client likely disconnected")
+                    break
+        except Exception as e:
+            print(f"Error during simulation streaming: {e}")
+            await websocket_manager.send_message(client_id, {
+                "type": "error",
+                "content": f"Simulation error: {str(e)}"
+            })
             
     except WebSocketDisconnect:
-        log.info(f"Client {client_id} disconnected")
+        print(f"Client {client_id} disconnected normally")
     except Exception as e:
-        error_message = {
-            "type": "error",
-            "content": f"Error: {str(e)}"
-        }
-        try:
-            await websocket_manager.send_message(client_id, error_message)
-        except:
-            pass  # Client likely already disconnected
+        print(f"Error in simulation websocket: {e}")
+        if client_id:
+            try:
+                await websocket_manager.send_message(client_id, {
+                    "type": "error",
+                    "content": f"Server error: {str(e)}"
+                })
+            except:
+                pass  # Client likely already disconnected
     finally:
-        websocket_manager.disconnect(client_id)
+        if client_id:
+            websocket_manager.disconnect(client_id)
+            print(f"Cleaned up client {client_id}")
 
 @router.post("/simulate/async")
 async def queue_simulation(
@@ -161,3 +193,56 @@ async def queue_status():
         "avg_job_duration": avg_duration,
         "estimated_wait_for_new_job": queue_length * avg_duration
     }
+
+import json
+
+@router.websocket("/test-socket")
+async def test_websocket_connection(
+    websocket: WebSocket,
+    websocket_manager: WebSocketManager = Depends(get_websocket_manager)
+):
+    """Simple WebSocket echo test endpoint"""
+    try:
+        client_id = await websocket_manager.connect(websocket)
+        log.info(f"Test WebSocket client connected: {client_id}")
+        
+        await websocket_manager.send_message(client_id, {
+            "type": "info", 
+            "content": "Connection established"
+        })
+        
+        try:
+            # Keep connection open and echo messages
+            while True:
+                data = await websocket.receive_text()
+                log.info(f"Received test message: {data[:50]}...")
+                
+                try:
+                    parsed = json.loads(data)
+                    # Echo back with timestamp
+                    response = {
+                        "type": "echo",
+                        "content": parsed,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                except json.JSONDecodeError:
+                    # Handle plain text
+                    response = {
+                        "type": "echo",
+                        "content": data,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    
+                await websocket_manager.send_message(client_id, response)
+                
+        except WebSocketDisconnect:
+            log.info(f"Test client {client_id} disconnected")
+            
+    except Exception as e:
+        log.error(f"Error in test WebSocket: {str(e)}")
+        try:
+            await websocket.close(code=1011, reason=f"Server error: {str(e)}")
+        except:
+            pass
+    finally:
+        websocket_manager.disconnect(client_id)

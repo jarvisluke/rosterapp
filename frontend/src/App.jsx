@@ -9,6 +9,7 @@ import RosterCreate from './components/roster/RosterCreate';
 import RosterDetails from './components/roster/RosterDetails';
 import OAuthCallback from './components/OAuthCallback';
 import StarPolyhedron  from './components/test/StarShape';
+import WebSocketTester from './components/simc/WebSocketTester';
 
 import 'bootstrap/dist/css/bootstrap.min.css';
 import Simc from './components/simc/Simc';
@@ -29,6 +30,7 @@ function App() {
         <Route path="/shape" element={<StarPolyhedron  />} />
 
         <Route path="/run-simulation" element={<Simc />} />
+        <Route path="/run-ws" element={<WebSocketTester />} />
       </Routes>
     </Router>
   );

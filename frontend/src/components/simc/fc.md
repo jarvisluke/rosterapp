@@ -20,7 +20,7 @@ import CharacterDisplay from './CharacterDisplay';
 import SimulationReport from './SimulationReport';
 import CombinationsDisplay from './CombinationsDisplay';
 import AdditionalOptions from './AdditionalOptions';
-import AsyncSimulationDisplay from './AsyncSimulationDisplay';
+import StreamingSimulationDisplay from './StreamingSimulationDisplay';
 
 const pairedSlots = {
   main_hand: 'off_hand',
@@ -58,9 +58,7 @@ const SIMULATION_ACTIONS = {
   UPDATE_COMBINATIONS: 'UPDATE_COMBINATIONS',
   UPDATE_SIM_OPTIONS: 'UPDATE_SIM_OPTIONS',
   UPDATE_SIM_RESULT: 'UPDATE_SIM_RESULT',
-  SET_SIMULATING: 'SET_SIMULATING',
-  SET_ACTIVE_JOB: 'SET_ACTIVE_JOB'
-
+  SET_SIMULATING: 'SET_SIMULATING'
 };
 
 const simulationReducer = (state, action) => {
@@ -75,8 +73,6 @@ const simulationReducer = (state, action) => {
       return { ...state, simulationResult: action.payload };
     case SIMULATION_ACTIONS.SET_SIMULATING:
       return { ...state, isSimulating: action.payload };
-    case SIMULATION_ACTIONS.SET_ACTIVE_JOB:
-      return { ...state, activeJob: action.payload };
     default:
       return state;
   }
@@ -102,9 +98,7 @@ const initialSimulationState = {
     powerInfusion: false
   },
   simulationResult: null,
-  isSimulating: false,
-  activeJob: null
-
+  isSimulating: false
 };
 
 // Create context
@@ -226,6 +220,7 @@ function Simc() {
   const [realmIndex, setRealmIndex] = useState(null);
   const simulationResultRef = useRef(null);
   const [simulationState, dispatch] = useReducer(simulationReducer, initialSimulationState);
+  const [simulationInputText, setSimulationInputText] = useState(null);
 
   useEffect(() => {
     const fetchRealms = async () => {
@@ -446,9 +441,9 @@ function Simc() {
     });
 
     return addSimulationOptions(combinationsText, simulationState.simOptions);
-  }, [extractCharacterInfo, createEquippedCombination, formatItemForSimC, addSimulationOptions]);
+  }, [extractCharacterInfo, createEquippedCombination, formatItemForSimC, addSimulationOptions, simulationState.simOptions]);
 
-  const runSimulation = useCallback(async () => {
+  const runSimulation = useCallback(() => {
     if (!simulationState.characterData) return;
 
     dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: true });
@@ -481,26 +476,9 @@ function Simc() {
       }
 
       console.log("Simulation input:", input);
-
-      const base64Input = btoa(input);
-
-      const response = await fetch('/api/simulate/async', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ simc_input: base64Input }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Error: ${response.statusText}`);
-      }
-
-      const jobData = await response.json();
-      dispatch({
-        type: SIMULATION_ACTIONS.SET_ACTIVE_JOB,
-        payload: jobData.job_id
-      });
+      
+      // Set the input text for the streaming component
+      setSimulationInputText(input);
 
     } catch (error) {
       console.error('Simulation error:', error);
@@ -527,15 +505,18 @@ function Simc() {
     <SimulationContext.Provider value={simulationState}>
       <SimulationDispatchContext.Provider value={dispatch}>
         <div className="container mt-3 pb-5 mb-5">
-          {simulationState.activeJob && (
-            <AsyncSimulationDisplay
-              jobId={simulationState.activeJob}
+          {simulationInputText && (
+            <StreamingSimulationDisplay
+              simulationInput={simulationInputText}
               onClose={() => {
-                dispatch({ type: SIMULATION_ACTIONS.SET_ACTIVE_JOB, payload: null });
+                setSimulationInputText(null);
                 dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
               }}
               onComplete={(result) => {
-                dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_RESULT, payload: result });
+                if (result) {
+                  dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_RESULT, payload: result });
+                }
+                setSimulationInputText(null);
                 dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
               }}
             />
@@ -615,6 +596,11 @@ function Simc() {
             />
           )}
 
+          <SimulationResults
+            result={simulationState.simulationResult}
+            downloadReport={downloadReport}
+          />
+
           <SimulationButton
             canSimulate={canSimulate}
             isSimulating={simulationState.isSimulating}
@@ -629,81 +615,467 @@ function Simc() {
 export default Simc;
 ```
 
-`SimulationReport.jsx`
+`StreamingSimulationDisplay.jsx`
 ```jsx
-function SimulationReport({ htmlContent, onClose, jobId, height = '500px' }) {
-    const downloadReport = () => {
-      const blob = new Blob([htmlContent], { type: 'text/html' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `sim_report_${jobId || 'character'}.html`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    };
+import { useEffect, useState, useRef } from 'react';
+import { Modal, Button, ProgressBar, Alert } from 'react-bootstrap';
+
+const StreamingSimulationDisplay = ({ simulationInput, onClose, onComplete }) => {
+  const [output, setOutput] = useState([]);
+  const [error, setError] = useState(null);
+  const [progress, setProgress] = useState(0);
+  const [status, setStatus] = useState('connecting');
+  const [resultUrl, setResultUrl] = useState(null);
+  const [connectionLogs, setConnectionLogs] = useState([]);
+  const socketRef = useRef(null);
+  const outputContainerRef = useRef(null);
   
-    if (onClose) {
-      // Modal mode
-      return (
-        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
-          <div className="modal-dialog modal-xl modal-dialog-centered">
-            <div className="modal-content">
-              <div className="modal-header">
-                <h5 className="modal-title">Simulation Results</h5>
-                <button type="button" className="btn-close" onClick={onClose}></button>
-              </div>
-              <div className="modal-body p-0">
-                <div style={{ height: '70vh', overflow: 'auto' }}>
-                  <iframe
-                    srcDoc={htmlContent}
-                    style={{
-                      width: '100%',
-                      height: '100%',
-                      border: 'none'
-                    }}
-                    title="Simulation Report"
-                  />
-                </div>
-              </div>
-              <div className="modal-footer">
-                <button 
-                  type="button" 
-                  className="btn btn-secondary"
-                  onClick={downloadReport}
-                >
-                  Download Report
-                </button>
-                <button type="button" className="btn btn-primary" onClick={onClose}>
-                  Close
-                </button>
-              </div>
+  const addLog = (message, type = 'info') => {
+    console.log(`[WebSocket ${type}]:`, message);
+    const timestamp = new Date().toISOString();
+    setConnectionLogs(logs => [...logs, { timestamp, message, type }]);
+  };
+
+  useEffect(() => {
+    // Log websocket creation
+    addLog('Creating WebSocket connection...', 'init');
+    
+    // Determine the correct WebSocket URL
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = "localhost:8000";
+    const url = `${protocol}//${host}/api/simulate/stream`;
+    
+    addLog(`Connecting to: ${url}`, 'init');
+    
+    // Create WebSocket connection
+    const socket = new WebSocket(url);
+    socketRef.current = socket;
+    
+    // Log socket properties
+    addLog(`Socket created with readyState: ${socket.readyState}`, 'init');
+    addLog(`Socket binary type: ${socket.binaryType}`, 'init');
+    addLog(`Socket protocol: ${socket.protocol || 'none'}`, 'init');
+    addLog(`Socket extensions: ${socket.extensions || 'none'}`, 'init');
+    
+    socket.onopen = (event) => {
+      addLog('WebSocket connection opened', 'success');
+      addLog(`readyState: ${socket.readyState}`, 'success');
+      setStatus('connected');
+      
+      // Send the simulation input once connected
+      try {
+        const payload = JSON.stringify({ simc_input: btoa(simulationInput) });
+        addLog(`Sending payload (length: ${payload.length})`, 'info');
+        socket.send(payload);
+        addLog('Payload sent successfully', 'success');
+      } catch (err) {
+        addLog(`Error sending payload: ${err.message}`, 'error');
+        setError(`Failed to send simulation input: ${err.message}`);
+      }
+    };
+    
+    socket.onmessage = (event) => {
+      try {
+        addLog(`Received message (size: ${event.data.length})`, 'data');
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'error') {
+          addLog(`Error from server: ${data.content}`, 'error');
+          setError(data.content);
+          setStatus('error');
+        } else if (data.type === 'complete') {
+          addLog(`Simulation complete. Result URL: ${data.content}`, 'success');
+          setStatus('complete');
+          setResultUrl(data.content);
+          fetchResult(data.content);
+        } else {
+          // Log progress updates less frequently to reduce noise
+          if (data.progress && data.progress % 10 < 1) {
+            addLog(`Progress update: ${Math.round(data.progress)}%`, 'progress');
+          }
+          
+          // Append output
+          setOutput(prev => [...prev, data]);
+          
+          // Update progress if available
+          if (data.progress) {
+            setProgress(data.progress);
+          }
+          
+          // Auto-scroll to bottom
+          if (outputContainerRef.current) {
+            outputContainerRef.current.scrollTop = outputContainerRef.current.scrollHeight;
+          }
+        }
+      } catch (err) {
+        addLog(`Error parsing message: ${err.message}`, 'error');
+        addLog(`Raw message: ${event.data.substring(0, 200)}...`, 'error');
+        setError(`Failed to parse server message: ${err.message}`);
+      }
+    };
+    
+    socket.onerror = (event) => {
+      addLog('WebSocket error occurred', 'error');
+      addLog(`readyState: ${socket.readyState}`, 'error');
+      console.error('WebSocket error:', event);
+      setError('Connection error. Check console for details.');
+      setStatus('error');
+    };
+    
+    socket.onclose = (event) => {
+      addLog(`WebSocket connection closed (code: ${event.code}, reason: ${event.reason || 'none'})`, 'info');
+      addLog(`Was clean? ${event.wasClean ? 'Yes' : 'No'}`, 'info');
+      addLog(`Final readyState: ${socket.readyState}`, 'info');
+      
+      if (status !== 'complete' && status !== 'error') {
+        setError(`Connection closed unexpectedly (code: ${event.code}, reason: ${event.reason || 'Not provided'})`);
+        setStatus('error');
+      }
+    };
+    
+    // Cleanup function
+    return () => {
+      addLog('Component unmounting, closing WebSocket', 'cleanup');
+      if (socket) {
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          addLog(`Closing socket (current state: ${socket.readyState})`, 'cleanup');
+          socket.close(1000, 'Component unmounted');
+        } else {
+          addLog(`Socket already closed/closing (state: ${socket.readyState})`, 'cleanup');
+        }
+      }
+    };
+  }, [simulationInput]);
+  
+  const fetchResult = async (resultPath) => {
+    addLog(`Fetching result from: ${resultPath}`, 'info');
+    try {
+      const response = await fetch(`/${resultPath}`);
+      if (!response.ok) {
+        addLog(`Failed to fetch result: ${response.status} ${response.statusText}`, 'error');
+        throw new Error(`HTTP error: ${response.status} ${response.statusText}`);
+      }
+      
+      const htmlContent = await response.text();
+      addLog(`Result fetched successfully (size: ${htmlContent.length})`, 'success');
+      onComplete(htmlContent);
+    } catch (error) {
+      addLog(`Error fetching result: ${error.message}`, 'error');
+      console.error('Error fetching simulation result:', error);
+      setError(`Failed to load simulation result: ${error.message}`);
+      setStatus('error');
+    }
+  };
+  
+  const handleRetryConnection = () => {
+    addLog('Manually retrying connection', 'info');
+    // Close existing socket if open
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.close(1000, 'Manual reconnect');
+    }
+    
+    setStatus('connecting');
+    setError(null);
+    setOutput([]);
+    setProgress(0);
+    
+    // Create new socket with same input
+    // This will re-trigger the useEffect
+    setConnectionLogs([]);
+    setTimeout(() => {
+      // Force re-render by setting state again
+      setStatus('reconnecting');
+    }, 100);
+  };
+  
+  const formatOutput = (data) => {
+    if (data.type === 'stdout') {
+      return <div key={`line-${output.indexOf(data)}`} className="text-light">{data.content}</div>;
+    } else if (data.type === 'stderr') {
+      return <div key={`line-${output.indexOf(data)}`} className="text-danger">{data.content}</div>;
+    }
+    return null;
+  };
+  
+  const handleCancel = () => {
+    addLog('User cancelled simulation', 'info');
+    if (socketRef.current && (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING)) {
+      socketRef.current.close(1000, 'User cancelled');
+    }
+    onClose();
+  };
+
+  // Show connection debugging interface when there's an error
+  const showDebugInfo = status === 'error';
+
+  return (
+    <Modal show={true} onHide={handleCancel} backdrop="static" size="lg">
+      <Modal.Header closeButton>
+        <Modal.Title>SimC Simulation {status === 'error' ? '- Error' : status === 'complete' ? '- Complete' : '- Running'}</Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        {error && (
+          <Alert variant="danger">
+            <strong>Error:</strong> {error}
+            <Button variant="outline-danger" size="sm" className="float-end" onClick={handleRetryConnection}>
+              Retry Connection
+            </Button>
+          </Alert>
+        )}
+        
+        <div className="d-flex flex-column mb-3">
+          <div className="d-flex justify-content-between align-items-center mb-2">
+            <span className="fw-bold">Status: {status.charAt(0).toUpperCase() + status.slice(1)}</span>
+            <span>{Math.round(progress)}%</span>
+          </div>
+          <ProgressBar 
+            now={progress} 
+            variant={status === 'error' ? 'danger' : status === 'complete' ? 'success' : 'primary'} 
+          />
+        </div>
+        
+        <div 
+          ref={outputContainerRef}
+          className="bg-dark p-3 rounded" 
+          style={{ 
+            height: showDebugInfo ? '200px' : '400px', 
+            overflow: 'auto', 
+            fontFamily: 'monospace',
+            fontSize: '0.875rem',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word'
+          }}
+        >
+          {output.map(formatOutput)}
+        </div>
+        
+        {showDebugInfo && (
+          <div className="mt-3">
+            <h5>Connection Debug Info</h5>
+            <div className="bg-light p-2 rounded" style={{ maxHeight: '200px', overflow: 'auto' }}>
+              <table className="table table-sm table-striped">
+                <thead>
+                  <tr>
+                    <th style={{ width: '180px' }}>Timestamp</th>
+                    <th style={{ width: '100px' }}>Type</th>
+                    <th>Message</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {connectionLogs.map((log, idx) => (
+                    <tr key={idx} className={log.type === 'error' ? 'table-danger' : log.type === 'success' ? 'table-success' : ''}>
+                      <td className="text-muted small">{log.timestamp}</td>
+                      <td><span className={`badge bg-${log.type === 'error' ? 'danger' : log.type === 'success' ? 'success' : 'info'}`}>{log.type}</span></td>
+                      <td>{log.message}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            
+            <div className="mt-3">
+              <h6>Current WebSocket State</h6>
+              <ul className="list-group">
+                <li className="list-group-item d-flex justify-content-between align-items-center">
+                  ReadyState: 
+                  <span className="badge bg-secondary">
+                    {socketRef.current ? 
+                      ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][socketRef.current.readyState] || socketRef.current.readyState : 
+                      'No Socket'}
+                  </span>
+                </li>
+                <li className="list-group-item d-flex justify-content-between align-items-center">
+                  Protocol: <span>{socketRef.current?.protocol || 'none'}</span>
+                </li>
+                <li className="list-group-item d-flex justify-content-between align-items-center">
+                  Binary Type: <span>{socketRef.current?.binaryType || 'N/A'}</span>
+                </li>
+              </ul>
+            </div>
+            
+            <div className="mt-3">
+              <h6>Browser Info</h6>
+              <ul className="list-group">
+                <li className="list-group-item d-flex justify-content-between align-items-center">
+                  User Agent: <small className="text-truncate" style={{ maxWidth: '500px' }}>{navigator.userAgent}</small>
+                </li>
+                <li className="list-group-item d-flex justify-content-between align-items-center">
+                  WebSocket Supported: <span>{typeof WebSocket !== 'undefined' ? 'Yes' : 'No'}</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+        )}
+      </Modal.Body>
+      <Modal.Footer className="d-flex justify-content-between">
+        <Button variant="secondary" onClick={handleCancel}>
+          Cancel
+        </Button>
+        <div>
+          {showDebugInfo && (
+            <Button variant="outline-secondary" className="me-2" onClick={handleRetryConnection}>
+              Retry Connection
+            </Button>
+          )}
+          {status === 'complete' && (
+            <Button variant="primary" onClick={() => onComplete()}>
+              View Report
+            </Button>
+          )}
+          {status === 'error' && !showDebugInfo && (
+            <Button variant="info" onClick={() => setError('Showing debug interface')}>
+              Show Debug Info
+            </Button>
+          )}
+        </div>
+      </Modal.Footer>
+    </Modal>
+  );
+};
+
+export default StreamingSimulationDisplay;
+```
+
+`AsyncSimulationDisplay.jsx`
+```jsx
+import { useState, useEffect, useCallback } from 'react';
+import SimulationReport from './SimulationReport';
+
+function AsyncSimulationDisplay({ jobId, onClose, onComplete }) {
+  const [status, setStatus] = useState(null);
+  const [queuePosition, setQueuePosition] = useState(null);
+  const [estimatedWait, setEstimatedWait] = useState(null);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+
+  const checkStatus = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/simulate/status/${jobId}`);
+      if (!response.ok) {
+        throw new Error('Failed to get status');
+      }
+      const data = await response.json();
+      setStatus(data.status);
+      setQueuePosition(data.queue_position);
+      setEstimatedWait(data.estimated_wait);
+
+      if (data.status === 'COMPLETED') {
+        // Fetch result
+        const resultResponse = await fetch(`/api/simulate/result/${jobId}`);
+        if (!resultResponse.ok) {
+          throw new Error('Failed to get result');
+        }
+        const resultContent = await resultResponse.text();
+        setResult(resultContent);
+        onComplete(resultContent);
+      } else if (data.status === 'FAILED') {
+        setError(data.error || 'Simulation failed');
+      }
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [jobId, onComplete]);
+
+  useEffect(() => {
+    let intervalId;
+    
+    if (status !== 'COMPLETED' && status !== 'FAILED' && !error) {
+      // Start checking status immediately
+      checkStatus();
+      
+      // Then check every 5 seconds
+      intervalId = setInterval(checkStatus, 5000);
+    }
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [status, error, checkStatus]);
+
+  const formatWaitTime = (seconds) => {
+    if (seconds < 60) {
+      return `${seconds} seconds`;
+    } else if (seconds < 3600) {
+      const minutes = Math.floor(seconds / 60);
+      return `${minutes} minute${minutes !== 1 ? 's' : ''}`;
+    } else {
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      return `${hours} hour${hours !== 1 ? 's' : ''} ${minutes} minute${minutes !== 1 ? 's' : ''}`;
+    }
+  };
+
+  if (error) {
+    return (
+      <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+        <div className="modal-dialog modal-dialog-centered">
+          <div className="modal-content">
+            <div className="modal-header bg-danger text-white">
+              <h5 className="modal-title">Simulation Error</h5>
+              <button type="button" className="btn-close" onClick={onClose}></button>
+            </div>
+            <div className="modal-body">
+              <p className="text-danger">{error}</p>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={onClose}>
+                Close
+              </button>
             </div>
           </div>
         </div>
-      );
-    } else {
-      // Inline mode
-      return (
-        <div
-          className="border rounded bg-light"
-          style={{ height: height, overflow: 'auto' }}
-        >
-          <iframe
-            srcDoc={htmlContent}
-            style={{
-              width: '100%',
-              height: '100%',
-              border: 'none'
-            }}
-            title="Simulation Report"
-          />
-        </div>
-      );
-    }
+      </div>
+    );
   }
-  
-  export default SimulationReport;
+
+  if (status === 'COMPLETED' && result) {
+    return (
+      <SimulationReport 
+        htmlContent={result}
+        onClose={onClose}
+        jobId={jobId}
+      />
+    );
+  }
+
+  return (
+    <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+      <div className="modal-dialog modal-dialog-centered">
+        <div className="modal-content">
+          <div className="modal-header">
+            <h5 className="modal-title">Simulation in Progress</h5>
+            <button type="button" className="btn-close" onClick={onClose}></button>
+          </div>
+          <div className="modal-body text-center">
+            <div className="mb-3">
+              <div className="spinner-border text-primary" role="status">
+                <span className="visually-hidden">Loading...</span>
+              </div>
+            </div>
+            <h6>Status: {status}</h6>
+            {queuePosition > 0 && (
+              <p>Queue Position: {queuePosition}</p>
+            )}
+            {estimatedWait && (
+              <p>Estimated Wait: {formatWaitTime(estimatedWait)}</p>
+            )}
+            <small className="text-muted">
+              Job ID: {jobId}
+            </small>
+          </div>
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={onClose}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default AsyncSimulationDisplay;
 ```
 
