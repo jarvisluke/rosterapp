@@ -1,13 +1,32 @@
+import { useState, useEffect, useCallback } from 'react';
+
 const AdditionalOptions = ({ options, onChange }) => {
-  const handleOptionChange = (key, value) => {
-    onChange({ ...options, [key]: value });
-  };
+  // Local state for controlled inputs
+  const [localOptions, setLocalOptions] = useState(options);
+
+  // Sync local state when options prop changes (initial load)
+  useEffect(() => {
+    setLocalOptions(options);
+  }, [options]);
+
+  // Debounced update to parent
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      onChange(localOptions);
+    }, 300); // 300ms debounce
+
+    return () => clearTimeout(timeoutId);
+  }, [localOptions, onChange]);
+
+  const handleOptionChange = useCallback((key, value) => {
+    setLocalOptions(prev => ({ ...prev, [key]: value }));
+  }, []);
 
   return (
     <div className="additional-options">
       <div className="mb-3">
         <label htmlFor="fightDuration" className="form-label">
-          Fight Duration: {options.fightDuration} seconds
+          Fight Duration: {localOptions.fightDuration} seconds
         </label>
         <input
           type="range"
@@ -16,7 +35,7 @@ const AdditionalOptions = ({ options, onChange }) => {
           min="60"
           max="600"
           step="10"
-          value={options.fightDuration}
+          value={localOptions.fightDuration}
           onChange={(e) => handleOptionChange('fightDuration', parseInt(e.target.value))}
         />
       </div>
@@ -26,7 +45,7 @@ const AdditionalOptions = ({ options, onChange }) => {
           type="checkbox"
           className="form-check-input"
           id="optimalRaidBuffs"
-          checked={options.optimalRaidBuffs}
+          checked={localOptions.optimalRaidBuffs}
           onChange={(e) => handleOptionChange('optimalRaidBuffs', e.target.checked)}
         />
         <label className="form-check-label" htmlFor="optimalRaidBuffs">
@@ -34,7 +53,7 @@ const AdditionalOptions = ({ options, onChange }) => {
         </label>
       </div>
 
-      {!options.optimalRaidBuffs && (
+      {!localOptions.optimalRaidBuffs && (
         <div className="raid-buffs-container ms-4 mb-3">
           <div className="row">
             <div className="col-md-6">
@@ -43,7 +62,7 @@ const AdditionalOptions = ({ options, onChange }) => {
                   type="checkbox"
                   className="form-check-input"
                   id="bloodlust"
-                  checked={options.bloodlust}
+                  checked={localOptions.bloodlust}
                   onChange={(e) => handleOptionChange('bloodlust', e.target.checked)}
                 />
                 <label className="form-check-label" htmlFor="bloodlust">
@@ -55,7 +74,7 @@ const AdditionalOptions = ({ options, onChange }) => {
                   type="checkbox"
                   className="form-check-input"
                   id="arcaneIntellect"
-                  checked={options.arcaneIntellect}
+                  checked={localOptions.arcaneIntellect}
                   onChange={(e) => handleOptionChange('arcaneIntellect', e.target.checked)}
                 />
                 <label className="form-check-label" htmlFor="arcaneIntellect">
@@ -67,7 +86,7 @@ const AdditionalOptions = ({ options, onChange }) => {
                   type="checkbox"
                   className="form-check-input"
                   id="battleShout"
-                  checked={options.battleShout}
+                  checked={localOptions.battleShout}
                   onChange={(e) => handleOptionChange('battleShout', e.target.checked)}
                 />
                 <label className="form-check-label" htmlFor="battleShout">
@@ -79,7 +98,7 @@ const AdditionalOptions = ({ options, onChange }) => {
                   type="checkbox"
                   className="form-check-input"
                   id="markOfTheWild"
-                  checked={options.markOfTheWild}
+                  checked={localOptions.markOfTheWild}
                   onChange={(e) => handleOptionChange('markOfTheWild', e.target.checked)}
                 />
                 <label className="form-check-label" htmlFor="markOfTheWild">
@@ -91,7 +110,7 @@ const AdditionalOptions = ({ options, onChange }) => {
                   type="checkbox"
                   className="form-check-input"
                   id="powerWordFortitude"
-                  checked={options.powerWordFortitude}
+                  checked={localOptions.powerWordFortitude}
                   onChange={(e) => handleOptionChange('powerWordFortitude', e.target.checked)}
                 />
                 <label className="form-check-label" htmlFor="powerWordFortitude">
@@ -105,7 +124,7 @@ const AdditionalOptions = ({ options, onChange }) => {
                   type="checkbox"
                   className="form-check-input"
                   id="chaosBrand"
-                  checked={options.chaosBrand}
+                  checked={localOptions.chaosBrand}
                   onChange={(e) => handleOptionChange('chaosBrand', e.target.checked)}
                 />
                 <label className="form-check-label" htmlFor="chaosBrand">
@@ -117,7 +136,7 @@ const AdditionalOptions = ({ options, onChange }) => {
                   type="checkbox"
                   className="form-check-input"
                   id="mysticTouch"
-                  checked={options.mysticTouch}
+                  checked={localOptions.mysticTouch}
                   onChange={(e) => handleOptionChange('mysticTouch', e.target.checked)}
                 />
                 <label className="form-check-label" htmlFor="mysticTouch">
@@ -129,7 +148,7 @@ const AdditionalOptions = ({ options, onChange }) => {
                   type="checkbox"
                   className="form-check-input"
                   id="skyfury"
-                  checked={options.skyfury}
+                  checked={localOptions.skyfury}
                   onChange={(e) => handleOptionChange('skyfury', e.target.checked)}
                 />
                 <label className="form-check-label" htmlFor="skyfury">
@@ -141,7 +160,7 @@ const AdditionalOptions = ({ options, onChange }) => {
                   type="checkbox"
                   className="form-check-input"
                   id="huntersMark"
-                  checked={options.huntersMark}
+                  checked={localOptions.huntersMark}
                   onChange={(e) => handleOptionChange('huntersMark', e.target.checked)}
                 />
                 <label className="form-check-label" htmlFor="huntersMark">
@@ -158,7 +177,7 @@ const AdditionalOptions = ({ options, onChange }) => {
           type="checkbox"
           className="form-check-input"
           id="powerInfusion"
-          checked={options.powerInfusion}
+          checked={localOptions.powerInfusion}
           onChange={(e) => handleOptionChange('powerInfusion', e.target.checked)}
         />
         <label className="form-check-label" htmlFor="powerInfusion">
