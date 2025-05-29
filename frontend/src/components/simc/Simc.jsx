@@ -12,7 +12,7 @@ import {
 import AddonInput from './AddonInput';
 import ArmoryInput from './ArmoryInput';
 import ItemSelect from './ItemSelect';
-import fetchApi from '../../util/api';
+import { apiClient, ApiError } from '../../util/api';
 import CollapsibleSection from './CollapsibleSection';
 import CharacterDisplay from './CharacterDisplay';
 import SimulationReport from './SimulationReport';
@@ -221,15 +221,39 @@ function Simc() {
   const [simulationState, dispatch] = useReducer(simulationReducer, initialSimulationState);
   const [currentJobId, setCurrentJobId] = useState(null);
   const resultsRef = useRef(null);
-
+  const [isLoadingRealms, setIsLoadingRealms] = useState(true);
 
   useEffect(() => {
     const fetchRealms = async () => {
+      setIsLoadingRealms(true);
       try {
-        const data = await fetchApi('/api/realms', true);
+        const data = await apiClient.get('/api/realms', {
+          cache: true,
+          cacheTTL: 1000 * 60 * 60 * 24,
+          retries: 2,
+          retryDelay: 1000,
+        });
         setRealmIndex(data);
       } catch (error) {
         console.error('Error fetching realms:', error);
+
+        if (error instanceof ApiError) {
+          let errorMessage = 'Failed to load realm data.';
+
+          if (error.isNetworkError) {
+            errorMessage = 'Network error while loading realm data. Please check your connection.';
+          } else if (error.isTimeoutError) {
+            errorMessage = 'Timeout while loading realm data. Please try again.';
+          } else if (error.isServerError) {
+            errorMessage = 'Server error while loading realm data. Please try again later.';
+          }
+
+          if (!error.isNetworkError || process.env.NODE_ENV === 'development') {
+            alert(errorMessage);
+          }
+        }
+      } finally {
+        setIsLoadingRealms(false);
       }
     };
 
@@ -422,7 +446,7 @@ function Simc() {
     }
 
     combinations.forEach((combo, index) => {
-      const comboNumber = index +1;
+      const comboNumber = index + 1;
       combinationsText += `copy="Combo ${comboNumber}"\n`;
       combinationsText += `### Gear Combination ${comboNumber}\n`;
 
@@ -478,34 +502,58 @@ function Simc() {
 
       console.log("Simulation input:", input);
 
-      // Submit simulation to async endpoint
-      const response = await fetch('/api/simulate/async', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          simc_input: btoa(input)  // Base64 encode the input
-        })
+      // Submit simulation using the new API client
+      const data = await apiClient.post('/api/simulate/async', {
+        simc_input: btoa(input)
+      }, {
+        timeout: 10000, // 10 second timeout for submission
+        retries: 2
       });
 
-      if (!response.ok) {
-        throw new Error(`Failed to submit simulation: ${response.status} ${response.statusText}`);
-      }
-
-      const data = await response.json();
       console.log("Simulation queued with job ID:", data.job_id);
-      
-      // Set the current job ID to show the async display
       setCurrentJobId(data.job_id);
 
     } catch (error) {
       console.error('Simulation error:', error);
-      alert('Failed to start simulation: ' + error.message);
+
+      let errorMessage = 'Failed to start simulation';
+      if (error instanceof ApiError) {
+        if (error.isNetworkError) {
+          errorMessage = 'Network error. Please check your connection.';
+        } else if (error.isTimeoutError) {
+          errorMessage = 'Request timed out. Please try again.';
+        } else if (error.isServerError) {
+          errorMessage = 'Server error. Please try again later.';
+        } else if (error.status === 400) {
+          errorMessage = 'Invalid simulation input.';
+        }
+      }
+
+      alert(errorMessage + (error.data?.detail ? `: ${error.data.detail}` : ''));
       dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
     }
   }, [simulationState, inputMode, formatCombinations, extractCharacterInfo, addSimulationOptions]);
 
+  // Also update the realm fetching in useEffect:
+  useEffect(() => {
+    const fetchRealms = async () => {
+      try {
+        const data = await apiClient.get('/api/realms', {
+          cache: true,
+          cacheTTL: 1000 * 60 * 60 * 24 // Cache for 24 hours
+        });
+        setRealmIndex(data);
+      } catch (error) {
+        console.error('Error fetching realms:', error);
+        if (error instanceof ApiError && !error.isNetworkError) {
+          // Only show error if it's not a network issue
+          alert('Failed to load realm data. Some features may not work properly.');
+        }
+      }
+    };
+
+    fetchRealms();
+  }, []);
   const downloadReport = useCallback(() => {
     if (!simulationState.simulationResult) return;
 
@@ -520,21 +568,21 @@ function Simc() {
     URL.revokeObjectURL(url);
   }, [simulationState.simulationResult, simulationState.characterData]);
 
-const scrollToResults = useCallback(() => {
-  if (resultsRef.current) {
-    resultsRef.current.scrollIntoView({ behavior: 'smooth' });
-  }
-}, []);
+  const scrollToResults = useCallback(() => {
+    if (resultsRef.current) {
+      resultsRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, []);
 
-const handleSimulationComplete = useCallback((result) => {
-  if (result) {
-    dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_RESULT, payload: result });
-    // Add small delay to ensure the results are rendered before scrolling
-    setTimeout(() => scrollToResults(), 100);
-  }
-  setCurrentJobId(null);
-  dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
-}, [scrollToResults]);
+  const handleSimulationComplete = useCallback((result) => {
+    if (result) {
+      dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_RESULT, payload: result });
+      // Add small delay to ensure the results are rendered before scrolling
+      setTimeout(() => scrollToResults(), 100);
+    }
+    setCurrentJobId(null);
+    dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
+  }, [scrollToResults]);
 
   const handleSimulationClose = useCallback(() => {
     setCurrentJobId(null);
@@ -542,107 +590,108 @@ const handleSimulationComplete = useCallback((result) => {
   }, []);
 
   return (
-  <SimulationContext.Provider value={simulationState}>
-    <SimulationDispatchContext.Provider value={dispatch}>
-      <div className="container mt-3 pb-5 mb-5">
-        {currentJobId && (
-          <AsyncSimulationDisplay
-            jobId={currentJobId}
-            onClose={handleSimulationClose}
-            onComplete={handleSimulationComplete}
-          />
-        )}
-
-        <div ref={resultsRef}>
-          <SimulationResults
-            result={simulationState.simulationResult}
-            downloadReport={downloadReport}
-          />
-        </div>
-
-        <div className="mb-2">
-          <input
-            type="radio"
-            className="btn-check"
-            name="options-outlined"
-            id="addon_radio"
-            value="addon"
-            checked={inputMode === 'addon'}
-            onChange={(e) => {
-              setInputMode(e.target.value);
-              dispatch({
-                type: SIMULATION_ACTIONS.UPDATE_CHARACTER_DATA,
-                payload: { character: null, items: null, simcInput: '' }
-              });
-            }}
-          />
-          <label className="btn btn-outline-primary me-2" htmlFor="addon_radio">SimC Addon</label>
-
-          <input
-            type="radio"
-            className="btn-check"
-            name="options-outlined"
-            id="armory_radio"
-            value="armory"
-            checked={inputMode === 'armory'}
-            onChange={(e) => {
-              setInputMode(e.target.value);
-              dispatch({
-                type: SIMULATION_ACTIONS.UPDATE_CHARACTER_DATA,
-                payload: { character: null, items: null, simcInput: '' }
-              });
-            }}
-          />
-          <label className="btn btn-outline-primary" htmlFor="armory_radio">Armory</label>
-        </div>
-
-        {inputMode === 'addon' ? (
-          <AddonInput
-            onDataUpdate={handleDataUpdate}
-            pairedSlots={pairedSlots}
-            skippedSlots={skippedSlots}
-          />
-        ) : (
-          <ArmoryInput
-            onDataUpdate={handleDataUpdate}
-            pairedSlots={pairedSlots}
-            skippedSlots={skippedSlots}
-            realmIndex={realmIndex}
-          />
-        )}
-
-        <MemoizedCharacterDisplay character={simulationState.characterData} />
-
-        {simulationState.characterData && (
-          <EquipmentSection itemsData={simulationState.itemsData} />
-        )}
-
-        {simulationState.characterData && (
-          <CollapsibleSection title="Additional Options">
-            <MemoizedAdditionalOptions
-              options={simulationState.simOptions}
-              onChange={handleOptionsChange}
+    <SimulationContext.Provider value={simulationState}>
+      <SimulationDispatchContext.Provider value={dispatch}>
+        <div className="container mt-3 pb-5 mb-5">
+          {currentJobId && (
+            <AsyncSimulationDisplay
+              jobId={currentJobId}
+              onClose={handleSimulationClose}
+              onComplete={handleSimulationComplete}
             />
-          </CollapsibleSection>
-        )}
+          )}
 
-        {simulationState.characterData && (
-          <CombinationsSection
-            combinations={simulationState.combinations}
-            characterData={simulationState.characterData}
-            itemsData={simulationState.itemsData}
+          <div ref={resultsRef}>
+            <SimulationResults
+              result={simulationState.simulationResult}
+              downloadReport={downloadReport}
+            />
+          </div>
+
+          <div className="mb-2">
+            <input
+              type="radio"
+              className="btn-check"
+              name="options-outlined"
+              id="addon_radio"
+              value="addon"
+              checked={inputMode === 'addon'}
+              onChange={(e) => {
+                setInputMode(e.target.value);
+                dispatch({
+                  type: SIMULATION_ACTIONS.UPDATE_CHARACTER_DATA,
+                  payload: { character: null, items: null, simcInput: '' }
+                });
+              }}
+            />
+            <label className="btn btn-outline-primary me-2" htmlFor="addon_radio">SimC Addon</label>
+
+            <input
+              type="radio"
+              className="btn-check"
+              name="options-outlined"
+              id="armory_radio"
+              value="armory"
+              checked={inputMode === 'armory'}
+              onChange={(e) => {
+                setInputMode(e.target.value);
+                dispatch({
+                  type: SIMULATION_ACTIONS.UPDATE_CHARACTER_DATA,
+                  payload: { character: null, items: null, simcInput: '' }
+                });
+              }}
+            />
+            <label className="btn btn-outline-primary" htmlFor="armory_radio">Armory</label>
+          </div>
+
+          {inputMode === 'addon' ? (
+            <AddonInput
+              onDataUpdate={handleDataUpdate}
+              pairedSlots={pairedSlots}
+              skippedSlots={skippedSlots}
+            />
+          ) : (
+            <ArmoryInput
+              onDataUpdate={handleDataUpdate}
+              pairedSlots={pairedSlots}
+              skippedSlots={skippedSlots}
+              realmIndex={realmIndex}
+              isLoadingRealms={isLoadingRealms}
+            />
+          )}
+
+          <MemoizedCharacterDisplay character={simulationState.characterData} />
+
+          {simulationState.characterData && (
+            <EquipmentSection itemsData={simulationState.itemsData} />
+          )}
+
+          {simulationState.characterData && (
+            <CollapsibleSection title="Additional Options">
+              <MemoizedAdditionalOptions
+                options={simulationState.simOptions}
+                onChange={handleOptionsChange}
+              />
+            </CollapsibleSection>
+          )}
+
+          {simulationState.characterData && (
+            <CombinationsSection
+              combinations={simulationState.combinations}
+              characterData={simulationState.characterData}
+              itemsData={simulationState.itemsData}
+            />
+          )}
+
+          <SimulationButton
+            canSimulate={canSimulate}
+            isSimulating={simulationState.isSimulating}
+            onRun={runSimulation}
           />
-        )}
-
-        <SimulationButton
-          canSimulate={canSimulate}
-          isSimulating={simulationState.isSimulating}
-          onRun={runSimulation}
-        />
-      </div>
-    </SimulationDispatchContext.Provider>
-  </SimulationContext.Provider>
-);
+        </div>
+      </SimulationDispatchContext.Provider>
+    </SimulationContext.Provider>
+  );
 }
 
 export default Simc;

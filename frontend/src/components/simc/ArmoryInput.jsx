@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 
-const ArmoryInput = ({ onDataUpdate, pairedSlots, skippedSlots, realmIndex }) => {
+function ArmoryInput({ onDataUpdate, pairedSlots, skippedSlots, realmIndex, isLoadingRealms }) {
   const [character, setCharacter] = useState('');
   const [realmSearch, setRealmSearch] = useState('');
   const [selectedRealm, setSelectedRealm] = useState('');
@@ -36,6 +36,9 @@ const ArmoryInput = ({ onDataUpdate, pairedSlots, skippedSlots, realmIndex }) =>
   };
 
   const handleRealmSearch = (e) => {
+    // Don't allow input if realms are still loading
+    if (isLoadingRealms) return;
+    
     setRealmSearch(e.target.value);
     setShowRealmDropdown(true);
     if (error) setError(null);
@@ -46,6 +49,13 @@ const ArmoryInput = ({ onDataUpdate, pairedSlots, skippedSlots, realmIndex }) =>
     setRealmSearch(name);
     setShowRealmDropdown(false);
     if (error) setError(null);
+  };
+
+  const handleRealmClick = () => {
+    // Don't show dropdown if realms are still loading
+    if (!isLoadingRealms) {
+      setShowRealmDropdown(true);
+    }
   };
 
   const lookupCharacter = async () => {
@@ -214,17 +224,28 @@ const ArmoryInput = ({ onDataUpdate, pairedSlots, skippedSlots, realmIndex }) =>
         <div className="form-floating position-relative">
           <input
             type="text"
-            className="form-control"
+            className={`form-control ${isLoadingRealms ? 'bg-light text-muted' : ''}`}
             id="realmInput"
-            value={realmSearch}
+            value={isLoadingRealms ? '' : realmSearch}
             onChange={handleRealmSearch}
-            onClick={() => setShowRealmDropdown(true)}
-            placeholder="Search realm"
+            onClick={handleRealmClick}
+            placeholder={isLoadingRealms ? "Loading realms..." : "Search realm"}
+            disabled={isLoadingRealms}
             ref={inputRef}
+            style={isLoadingRealms ? { cursor: 'not-allowed' } : {}}
           />
-          <label htmlFor="realmInput">Realm</label>
+          <label htmlFor="realmInput">
+            {isLoadingRealms ? (
+              <>
+                <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                Loading Realms...
+              </>
+            ) : (
+              'Realm'
+            )}
+          </label>
 
-          {showRealmDropdown && filteredRealms.length > 0 && (
+          {showRealmDropdown && !isLoadingRealms && filteredRealms.length > 0 && (
             <div
               className="position-absolute w-100 start-0 mt-1 bg-white border rounded-3 shadow-sm overflow-auto"
               style={{ maxHeight: '200px', zIndex: 1000 }}
@@ -239,6 +260,18 @@ const ArmoryInput = ({ onDataUpdate, pairedSlots, skippedSlots, realmIndex }) =>
                   {realm.name}
                 </button>
               ))}
+            </div>
+          )}
+
+          {/* Show loading message in dropdown if realms are loading */}
+          {showRealmDropdown && isLoadingRealms && (
+            <div
+              className="position-absolute w-100 start-0 mt-1 bg-white border rounded-3 shadow-sm p-3 text-center"
+              style={{ zIndex: 1000 }}
+              ref={dropdownRef}
+            >
+              <div className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
+              <span className="text-muted">Loading realm data...</span>
             </div>
           )}
         </div>

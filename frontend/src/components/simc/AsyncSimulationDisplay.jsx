@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { apiClient, ApiError } from '../../util/api';
 import SimulationReport from './SimulationReport';
 
 function AsyncSimulationDisplay({ jobId, onClose, onComplete }) {
@@ -10,29 +11,45 @@ function AsyncSimulationDisplay({ jobId, onClose, onComplete }) {
 
   const checkStatus = useCallback(async () => {
     try {
-      const response = await fetch(`/api/simulate/status/${jobId}`);
-      if (!response.ok) {
-        throw new Error('Failed to get status');
-      }
-      const data = await response.json();
+      const data = await apiClient.get(`/api/simulate/status/${jobId}`, {
+        timeout: 10000,
+        retries: 3,
+        retryDelay: 1000
+      });
+      
       setStatus(data.status);
       setQueuePosition(data.queue_position);
       setEstimatedWait(data.estimated_wait);
 
       if (data.status === 'COMPLETED') {
-        // Fetch result
-        const resultResponse = await fetch(`/api/simulate/result/${jobId}`);
-        if (!resultResponse.ok) {
-          throw new Error('Failed to get result');
+        try {
+          const resultContent = await apiClient.get(`/api/simulate/result/${jobId}`, {
+            timeout: 30000,
+            retries: 2
+          });
+          setResult(resultContent);
+          onComplete(resultContent);
+        } catch (resultError) {
+          console.error('Error fetching result:', resultError);
+          setError('Failed to load simulation result');
         }
-        const resultContent = await resultResponse.text();
-        setResult(resultContent);
-        onComplete(resultContent);
       } else if (data.status === 'FAILED') {
         setError(data.error || 'Simulation failed');
       }
     } catch (err) {
-      setError(err.message);
+      console.error('Error checking status:', err);
+      
+      if (err instanceof ApiError) {
+        if (err.isNetworkError) {
+          setError('Connection lost. Retrying...');
+        } else if (err.status === 404) {
+          setError('Simulation job not found');
+        } else {
+          setError(`Failed to check status: ${err.message}`);
+        }
+      } else {
+        setError('Unknown error occurred');
+      }
     }
   }, [jobId, onComplete]);
 
@@ -40,10 +57,7 @@ function AsyncSimulationDisplay({ jobId, onClose, onComplete }) {
     let intervalId;
     
     if (status !== 'COMPLETED' && status !== 'FAILED' && !error) {
-      // Start checking status immediately
       checkStatus();
-      
-      // Then check every 5 seconds
       intervalId = setInterval(checkStatus, 5000);
     }
 
