@@ -14,13 +14,13 @@ import {
 import AddonInput from './AddonInput';
 import ArmoryInput from './ArmoryInput';
 import ItemSelect from './ItemSelect';
-import fetchApi from '../../util/api';
+import { apiClient, ApiError } from '../../util/api';
 import CollapsibleSection from './CollapsibleSection';
 import CharacterDisplay from './CharacterDisplay';
 import SimulationReport from './SimulationReport';
 import CombinationsDisplay from './CombinationsDisplay';
 import AdditionalOptions from './AdditionalOptions';
-import StreamingSimulationDisplay from './StreamingSimulationDisplay';
+import AsyncSimulationDisplay from './AsyncSimulationDisplay';
 
 const pairedSlots = {
   main_hand: 'off_hand',
@@ -113,6 +113,7 @@ function useSimulation() {
 function useSimulationDispatch() {
   return useContext(SimulationDispatchContext);
 }
+
 
 // Memoized components
 const MemoizedCharacterDisplay = memo(({ character }) => {
@@ -220,15 +221,41 @@ function Simc() {
   const [realmIndex, setRealmIndex] = useState(null);
   const simulationResultRef = useRef(null);
   const [simulationState, dispatch] = useReducer(simulationReducer, initialSimulationState);
-  const [simulationInputText, setSimulationInputText] = useState(null);
+  const [currentJobId, setCurrentJobId] = useState(null);
+  const resultsRef = useRef(null);
+  const [isLoadingRealms, setIsLoadingRealms] = useState(true);
 
   useEffect(() => {
     const fetchRealms = async () => {
+      setIsLoadingRealms(true);
       try {
-        const data = await fetchApi('/api/realms', true);
+        const data = await apiClient.get('/api/realms', {
+          cache: true,
+          cacheTTL: 1000 * 60 * 60 * 24,
+          retries: 2,
+          retryDelay: 1000,
+        });
         setRealmIndex(data);
       } catch (error) {
         console.error('Error fetching realms:', error);
+
+        if (error instanceof ApiError) {
+          let errorMessage = 'Failed to load realm data.';
+
+          if (error.isNetworkError) {
+            errorMessage = 'Network error while loading realm data. Please check your connection.';
+          } else if (error.isTimeoutError) {
+            errorMessage = 'Timeout while loading realm data. Please try again.';
+          } else if (error.isServerError) {
+            errorMessage = 'Server error while loading realm data. Please try again later.';
+          }
+
+          if (!error.isNetworkError || process.env.NODE_ENV === 'development') {
+            alert(errorMessage);
+          }
+        }
+      } finally {
+        setIsLoadingRealms(false);
       }
     };
 
@@ -443,7 +470,7 @@ function Simc() {
     return addSimulationOptions(combinationsText, simulationState.simOptions);
   }, [extractCharacterInfo, createEquippedCombination, formatItemForSimC, addSimulationOptions, simulationState.simOptions]);
 
-  const runSimulation = useCallback(() => {
+  const runSimulation = useCallback(async () => {
     if (!simulationState.characterData) return;
 
     dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: true });
@@ -476,17 +503,59 @@ function Simc() {
       }
 
       console.log("Simulation input:", input);
-      
-      // Set the input text for the streaming component
-      setSimulationInputText(input);
+
+      // Submit simulation using the new API client
+      const data = await apiClient.post('/api/simulate/async', {
+        simc_input: btoa(input)
+      }, {
+        timeout: 10000, // 10 second timeout for submission
+        retries: 2
+      });
+
+      console.log("Simulation queued with job ID:", data.job_id);
+      setCurrentJobId(data.job_id);
 
     } catch (error) {
       console.error('Simulation error:', error);
-      alert('Failed to start simulation: ' + error.message);
+
+      let errorMessage = 'Failed to start simulation';
+      if (error instanceof ApiError) {
+        if (error.isNetworkError) {
+          errorMessage = 'Network error. Please check your connection.';
+        } else if (error.isTimeoutError) {
+          errorMessage = 'Request timed out. Please try again.';
+        } else if (error.isServerError) {
+          errorMessage = 'Server error. Please try again later.';
+        } else if (error.status === 400) {
+          errorMessage = 'Invalid simulation input.';
+        }
+      }
+
+      alert(errorMessage + (error.data?.detail ? `: ${error.data.detail}` : ''));
       dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
     }
   }, [simulationState, inputMode, formatCombinations, extractCharacterInfo, addSimulationOptions]);
 
+  // Also update the realm fetching in useEffect:
+  useEffect(() => {
+    const fetchRealms = async () => {
+      try {
+        const data = await apiClient.get('/api/realms', {
+          cache: true,
+          cacheTTL: 1000 * 60 * 60 * 24 // Cache for 24 hours
+        });
+        setRealmIndex(data);
+      } catch (error) {
+        console.error('Error fetching realms:', error);
+        if (error instanceof ApiError && !error.isNetworkError) {
+          // Only show error if it's not a network issue
+          alert('Failed to load realm data. Some features may not work properly.');
+        }
+      }
+    };
+
+    fetchRealms();
+  }, []);
   const downloadReport = useCallback(() => {
     if (!simulationState.simulationResult) return;
 
@@ -501,26 +570,45 @@ function Simc() {
     URL.revokeObjectURL(url);
   }, [simulationState.simulationResult, simulationState.characterData]);
 
+  const scrollToResults = useCallback(() => {
+    if (resultsRef.current) {
+      resultsRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, []);
+
+  const handleSimulationComplete = useCallback((result) => {
+    if (result) {
+      dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_RESULT, payload: result });
+      // Add small delay to ensure the results are rendered before scrolling
+      setTimeout(() => scrollToResults(), 100);
+    }
+    setCurrentJobId(null);
+    dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
+  }, [scrollToResults]);
+
+  const handleSimulationClose = useCallback(() => {
+    setCurrentJobId(null);
+    dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
+  }, []);
+
   return (
     <SimulationContext.Provider value={simulationState}>
       <SimulationDispatchContext.Provider value={dispatch}>
         <div className="container mt-3 pb-5 mb-5">
-          {simulationInputText && (
-            <StreamingSimulationDisplay
-              simulationInput={simulationInputText}
-              onClose={() => {
-                setSimulationInputText(null);
-                dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
-              }}
-              onComplete={(result) => {
-                if (result) {
-                  dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_RESULT, payload: result });
-                }
-                setSimulationInputText(null);
-                dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
-              }}
+          {currentJobId && (
+            <AsyncSimulationDisplay
+              jobId={currentJobId}
+              onClose={handleSimulationClose}
+              onComplete={handleSimulationComplete}
             />
           )}
+
+          <div ref={resultsRef}>
+            <SimulationResults
+              result={simulationState.simulationResult}
+              downloadReport={downloadReport}
+            />
+          </div>
 
           <div className="mb-2">
             <input
@@ -570,6 +658,7 @@ function Simc() {
               pairedSlots={pairedSlots}
               skippedSlots={skippedSlots}
               realmIndex={realmIndex}
+              isLoadingRealms={isLoadingRealms}
             />
           )}
 
@@ -596,11 +685,6 @@ function Simc() {
             />
           )}
 
-          <SimulationResults
-            result={simulationState.simulationResult}
-            downloadReport={downloadReport}
-          />
-
           <SimulationButton
             canSimulate={canSimulate}
             isSimulating={simulationState.isSimulating}
@@ -615,330 +699,10 @@ function Simc() {
 export default Simc;
 ```
 
-`StreamingSimulationDisplay.jsx`
-```jsx
-import { useEffect, useState, useRef } from 'react';
-import { Modal, Button, ProgressBar, Alert } from 'react-bootstrap';
-
-const StreamingSimulationDisplay = ({ simulationInput, onClose, onComplete }) => {
-  const [output, setOutput] = useState([]);
-  const [error, setError] = useState(null);
-  const [progress, setProgress] = useState(0);
-  const [status, setStatus] = useState('connecting');
-  const [resultUrl, setResultUrl] = useState(null);
-  const [connectionLogs, setConnectionLogs] = useState([]);
-  const socketRef = useRef(null);
-  const outputContainerRef = useRef(null);
-  
-  const addLog = (message, type = 'info') => {
-    console.log(`[WebSocket ${type}]:`, message);
-    const timestamp = new Date().toISOString();
-    setConnectionLogs(logs => [...logs, { timestamp, message, type }]);
-  };
-
-  useEffect(() => {
-    // Log websocket creation
-    addLog('Creating WebSocket connection...', 'init');
-    
-    // Determine the correct WebSocket URL
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = "localhost:8000";
-    const url = `${protocol}//${host}/api/simulate/stream`;
-    
-    addLog(`Connecting to: ${url}`, 'init');
-    
-    // Create WebSocket connection
-    const socket = new WebSocket(url);
-    socketRef.current = socket;
-    
-    // Log socket properties
-    addLog(`Socket created with readyState: ${socket.readyState}`, 'init');
-    addLog(`Socket binary type: ${socket.binaryType}`, 'init');
-    addLog(`Socket protocol: ${socket.protocol || 'none'}`, 'init');
-    addLog(`Socket extensions: ${socket.extensions || 'none'}`, 'init');
-    
-    socket.onopen = (event) => {
-      addLog('WebSocket connection opened', 'success');
-      addLog(`readyState: ${socket.readyState}`, 'success');
-      setStatus('connected');
-      
-      // Send the simulation input once connected
-      try {
-        const payload = JSON.stringify({ simc_input: btoa(simulationInput) });
-        addLog(`Sending payload (length: ${payload.length})`, 'info');
-        socket.send(payload);
-        addLog('Payload sent successfully', 'success');
-      } catch (err) {
-        addLog(`Error sending payload: ${err.message}`, 'error');
-        setError(`Failed to send simulation input: ${err.message}`);
-      }
-    };
-    
-    socket.onmessage = (event) => {
-      try {
-        addLog(`Received message (size: ${event.data.length})`, 'data');
-        const data = JSON.parse(event.data);
-        
-        if (data.type === 'error') {
-          addLog(`Error from server: ${data.content}`, 'error');
-          setError(data.content);
-          setStatus('error');
-        } else if (data.type === 'complete') {
-          addLog(`Simulation complete. Result URL: ${data.content}`, 'success');
-          setStatus('complete');
-          setResultUrl(data.content);
-          fetchResult(data.content);
-        } else {
-          // Log progress updates less frequently to reduce noise
-          if (data.progress && data.progress % 10 < 1) {
-            addLog(`Progress update: ${Math.round(data.progress)}%`, 'progress');
-          }
-          
-          // Append output
-          setOutput(prev => [...prev, data]);
-          
-          // Update progress if available
-          if (data.progress) {
-            setProgress(data.progress);
-          }
-          
-          // Auto-scroll to bottom
-          if (outputContainerRef.current) {
-            outputContainerRef.current.scrollTop = outputContainerRef.current.scrollHeight;
-          }
-        }
-      } catch (err) {
-        addLog(`Error parsing message: ${err.message}`, 'error');
-        addLog(`Raw message: ${event.data.substring(0, 200)}...`, 'error');
-        setError(`Failed to parse server message: ${err.message}`);
-      }
-    };
-    
-    socket.onerror = (event) => {
-      addLog('WebSocket error occurred', 'error');
-      addLog(`readyState: ${socket.readyState}`, 'error');
-      console.error('WebSocket error:', event);
-      setError('Connection error. Check console for details.');
-      setStatus('error');
-    };
-    
-    socket.onclose = (event) => {
-      addLog(`WebSocket connection closed (code: ${event.code}, reason: ${event.reason || 'none'})`, 'info');
-      addLog(`Was clean? ${event.wasClean ? 'Yes' : 'No'}`, 'info');
-      addLog(`Final readyState: ${socket.readyState}`, 'info');
-      
-      if (status !== 'complete' && status !== 'error') {
-        setError(`Connection closed unexpectedly (code: ${event.code}, reason: ${event.reason || 'Not provided'})`);
-        setStatus('error');
-      }
-    };
-    
-    // Cleanup function
-    return () => {
-      addLog('Component unmounting, closing WebSocket', 'cleanup');
-      if (socket) {
-        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
-          addLog(`Closing socket (current state: ${socket.readyState})`, 'cleanup');
-          socket.close(1000, 'Component unmounted');
-        } else {
-          addLog(`Socket already closed/closing (state: ${socket.readyState})`, 'cleanup');
-        }
-      }
-    };
-  }, [simulationInput]);
-  
-  const fetchResult = async (resultPath) => {
-    addLog(`Fetching result from: ${resultPath}`, 'info');
-    try {
-      const response = await fetch(`/${resultPath}`);
-      if (!response.ok) {
-        addLog(`Failed to fetch result: ${response.status} ${response.statusText}`, 'error');
-        throw new Error(`HTTP error: ${response.status} ${response.statusText}`);
-      }
-      
-      const htmlContent = await response.text();
-      addLog(`Result fetched successfully (size: ${htmlContent.length})`, 'success');
-      onComplete(htmlContent);
-    } catch (error) {
-      addLog(`Error fetching result: ${error.message}`, 'error');
-      console.error('Error fetching simulation result:', error);
-      setError(`Failed to load simulation result: ${error.message}`);
-      setStatus('error');
-    }
-  };
-  
-  const handleRetryConnection = () => {
-    addLog('Manually retrying connection', 'info');
-    // Close existing socket if open
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-      socketRef.current.close(1000, 'Manual reconnect');
-    }
-    
-    setStatus('connecting');
-    setError(null);
-    setOutput([]);
-    setProgress(0);
-    
-    // Create new socket with same input
-    // This will re-trigger the useEffect
-    setConnectionLogs([]);
-    setTimeout(() => {
-      // Force re-render by setting state again
-      setStatus('reconnecting');
-    }, 100);
-  };
-  
-  const formatOutput = (data) => {
-    if (data.type === 'stdout') {
-      return <div key={`line-${output.indexOf(data)}`} className="text-light">{data.content}</div>;
-    } else if (data.type === 'stderr') {
-      return <div key={`line-${output.indexOf(data)}`} className="text-danger">{data.content}</div>;
-    }
-    return null;
-  };
-  
-  const handleCancel = () => {
-    addLog('User cancelled simulation', 'info');
-    if (socketRef.current && (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING)) {
-      socketRef.current.close(1000, 'User cancelled');
-    }
-    onClose();
-  };
-
-  // Show connection debugging interface when there's an error
-  const showDebugInfo = status === 'error';
-
-  return (
-    <Modal show={true} onHide={handleCancel} backdrop="static" size="lg">
-      <Modal.Header closeButton>
-        <Modal.Title>SimC Simulation {status === 'error' ? '- Error' : status === 'complete' ? '- Complete' : '- Running'}</Modal.Title>
-      </Modal.Header>
-      <Modal.Body>
-        {error && (
-          <Alert variant="danger">
-            <strong>Error:</strong> {error}
-            <Button variant="outline-danger" size="sm" className="float-end" onClick={handleRetryConnection}>
-              Retry Connection
-            </Button>
-          </Alert>
-        )}
-        
-        <div className="d-flex flex-column mb-3">
-          <div className="d-flex justify-content-between align-items-center mb-2">
-            <span className="fw-bold">Status: {status.charAt(0).toUpperCase() + status.slice(1)}</span>
-            <span>{Math.round(progress)}%</span>
-          </div>
-          <ProgressBar 
-            now={progress} 
-            variant={status === 'error' ? 'danger' : status === 'complete' ? 'success' : 'primary'} 
-          />
-        </div>
-        
-        <div 
-          ref={outputContainerRef}
-          className="bg-dark p-3 rounded" 
-          style={{ 
-            height: showDebugInfo ? '200px' : '400px', 
-            overflow: 'auto', 
-            fontFamily: 'monospace',
-            fontSize: '0.875rem',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word'
-          }}
-        >
-          {output.map(formatOutput)}
-        </div>
-        
-        {showDebugInfo && (
-          <div className="mt-3">
-            <h5>Connection Debug Info</h5>
-            <div className="bg-light p-2 rounded" style={{ maxHeight: '200px', overflow: 'auto' }}>
-              <table className="table table-sm table-striped">
-                <thead>
-                  <tr>
-                    <th style={{ width: '180px' }}>Timestamp</th>
-                    <th style={{ width: '100px' }}>Type</th>
-                    <th>Message</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {connectionLogs.map((log, idx) => (
-                    <tr key={idx} className={log.type === 'error' ? 'table-danger' : log.type === 'success' ? 'table-success' : ''}>
-                      <td className="text-muted small">{log.timestamp}</td>
-                      <td><span className={`badge bg-${log.type === 'error' ? 'danger' : log.type === 'success' ? 'success' : 'info'}`}>{log.type}</span></td>
-                      <td>{log.message}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            
-            <div className="mt-3">
-              <h6>Current WebSocket State</h6>
-              <ul className="list-group">
-                <li className="list-group-item d-flex justify-content-between align-items-center">
-                  ReadyState: 
-                  <span className="badge bg-secondary">
-                    {socketRef.current ? 
-                      ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][socketRef.current.readyState] || socketRef.current.readyState : 
-                      'No Socket'}
-                  </span>
-                </li>
-                <li className="list-group-item d-flex justify-content-between align-items-center">
-                  Protocol: <span>{socketRef.current?.protocol || 'none'}</span>
-                </li>
-                <li className="list-group-item d-flex justify-content-between align-items-center">
-                  Binary Type: <span>{socketRef.current?.binaryType || 'N/A'}</span>
-                </li>
-              </ul>
-            </div>
-            
-            <div className="mt-3">
-              <h6>Browser Info</h6>
-              <ul className="list-group">
-                <li className="list-group-item d-flex justify-content-between align-items-center">
-                  User Agent: <small className="text-truncate" style={{ maxWidth: '500px' }}>{navigator.userAgent}</small>
-                </li>
-                <li className="list-group-item d-flex justify-content-between align-items-center">
-                  WebSocket Supported: <span>{typeof WebSocket !== 'undefined' ? 'Yes' : 'No'}</span>
-                </li>
-              </ul>
-            </div>
-          </div>
-        )}
-      </Modal.Body>
-      <Modal.Footer className="d-flex justify-content-between">
-        <Button variant="secondary" onClick={handleCancel}>
-          Cancel
-        </Button>
-        <div>
-          {showDebugInfo && (
-            <Button variant="outline-secondary" className="me-2" onClick={handleRetryConnection}>
-              Retry Connection
-            </Button>
-          )}
-          {status === 'complete' && (
-            <Button variant="primary" onClick={() => onComplete()}>
-              View Report
-            </Button>
-          )}
-          {status === 'error' && !showDebugInfo && (
-            <Button variant="info" onClick={() => setError('Showing debug interface')}>
-              Show Debug Info
-            </Button>
-          )}
-        </div>
-      </Modal.Footer>
-    </Modal>
-  );
-};
-
-export default StreamingSimulationDisplay;
-```
-
 `AsyncSimulationDisplay.jsx`
 ```jsx
 import { useState, useEffect, useCallback } from 'react';
+import { apiClient, ApiError } from '../../util/api';
 import SimulationReport from './SimulationReport';
 
 function AsyncSimulationDisplay({ jobId, onClose, onComplete }) {
@@ -950,29 +714,45 @@ function AsyncSimulationDisplay({ jobId, onClose, onComplete }) {
 
   const checkStatus = useCallback(async () => {
     try {
-      const response = await fetch(`/api/simulate/status/${jobId}`);
-      if (!response.ok) {
-        throw new Error('Failed to get status');
-      }
-      const data = await response.json();
+      const data = await apiClient.get(`/api/simulate/status/${jobId}`, {
+        timeout: 10000,
+        retries: 3,
+        retryDelay: 1000
+      });
+      
       setStatus(data.status);
       setQueuePosition(data.queue_position);
       setEstimatedWait(data.estimated_wait);
 
       if (data.status === 'COMPLETED') {
-        // Fetch result
-        const resultResponse = await fetch(`/api/simulate/result/${jobId}`);
-        if (!resultResponse.ok) {
-          throw new Error('Failed to get result');
+        try {
+          const resultContent = await apiClient.get(`/api/simulate/result/${jobId}`, {
+            timeout: 30000,
+            retries: 2
+          });
+          setResult(resultContent);
+          onComplete(resultContent);
+        } catch (resultError) {
+          console.error('Error fetching result:', resultError);
+          setError('Failed to load simulation result');
         }
-        const resultContent = await resultResponse.text();
-        setResult(resultContent);
-        onComplete(resultContent);
       } else if (data.status === 'FAILED') {
         setError(data.error || 'Simulation failed');
       }
     } catch (err) {
-      setError(err.message);
+      console.error('Error checking status:', err);
+      
+      if (err instanceof ApiError) {
+        if (err.isNetworkError) {
+          setError('Connection lost. Retrying...');
+        } else if (err.status === 404) {
+          setError('Simulation job not found');
+        } else {
+          setError(`Failed to check status: ${err.message}`);
+        }
+      } else {
+        setError('Unknown error occurred');
+      }
     }
   }, [jobId, onComplete]);
 
@@ -980,10 +760,7 @@ function AsyncSimulationDisplay({ jobId, onClose, onComplete }) {
     let intervalId;
     
     if (status !== 'COMPLETED' && status !== 'FAILED' && !error) {
-      // Start checking status immediately
       checkStatus();
-      
-      // Then check every 5 seconds
       intervalId = setInterval(checkStatus, 5000);
     }
 
@@ -1077,5 +854,212 @@ function AsyncSimulationDisplay({ jobId, onClose, onComplete }) {
 }
 
 export default AsyncSimulationDisplay;
+```
+
+`AdditionalOptions.jsx`
+```jsx
+import React from 'react';
+
+const AdditionalOptions = ({ options, onChange }) => {
+  const handleOptionChange = (key, value) => {
+    onChange({ ...options, [key]: value });
+  };
+
+  return (
+    <div className="additional-options">
+      <div className="mb-3">
+        <label htmlFor="fightDuration" className="form-label">
+          Fight Duration: {options.fightDuration} seconds
+        </label>
+        <input
+          type="range"
+          className="form-range"
+          id="fightDuration"
+          min="60"
+          max="600"
+          step="10"
+          value={options.fightDuration}
+          onChange={(e) => handleOptionChange('fightDuration', parseInt(e.target.value))}
+        />
+      </div>
+
+      <div className="mb-3 form-check">
+        <input
+          type="checkbox"
+          className="form-check-input"
+          id="optimalRaidBuffs"
+          checked={options.optimalRaidBuffs}
+          onChange={(e) => handleOptionChange('optimalRaidBuffs', e.target.checked)}
+        />
+        <label className="form-check-label" htmlFor="optimalRaidBuffs">
+          Use Optimal Raid Buffs
+        </label>
+      </div>
+
+      {!options.optimalRaidBuffs && (
+        <div className="raid-buffs-container ms-4 mb-3">
+          <div className="row">
+            <div className="col-md-6">
+              <div className="form-check">
+                <input
+                  type="checkbox"
+                  className="form-check-input"
+                  id="bloodlust"
+                  checked={options.bloodlust}
+                  onChange={(e) => handleOptionChange('bloodlust', e.target.checked)}
+                />
+                <label className="form-check-label" htmlFor="bloodlust">
+                  Bloodlust / Heroism
+                </label>
+              </div>
+              <div className="form-check">
+                <input
+                  type="checkbox"
+                  className="form-check-input"
+                  id="arcaneIntellect"
+                  checked={options.arcaneIntellect}
+                  onChange={(e) => handleOptionChange('arcaneIntellect', e.target.checked)}
+                />
+                <label className="form-check-label" htmlFor="arcaneIntellect">
+                  Arcane Intellect
+                </label>
+              </div>
+              <div className="form-check">
+                <input
+                  type="checkbox"
+                  className="form-check-input"
+                  id="battleShout"
+                  checked={options.battleShout}
+                  onChange={(e) => handleOptionChange('battleShout', e.target.checked)}
+                />
+                <label className="form-check-label" htmlFor="battleShout">
+                  Battle Shout
+                </label>
+              </div>
+              <div className="form-check">
+                <input
+                  type="checkbox"
+                  className="form-check-input"
+                  id="markOfTheWild"
+                  checked={options.markOfTheWild}
+                  onChange={(e) => handleOptionChange('markOfTheWild', e.target.checked)}
+                />
+                <label className="form-check-label" htmlFor="markOfTheWild">
+                  Mark of the Wild
+                </label>
+              </div>
+              <div className="form-check">
+                <input
+                  type="checkbox"
+                  className="form-check-input"
+                  id="powerWordFortitude"
+                  checked={options.powerWordFortitude}
+                  onChange={(e) => handleOptionChange('powerWordFortitude', e.target.checked)}
+                />
+                <label className="form-check-label" htmlFor="powerWordFortitude">
+                  Power Word: Fortitude
+                </label>
+              </div>
+            </div>
+            <div className="col-md-6">
+              <div className="form-check">
+                <input
+                  type="checkbox"
+                  className="form-check-input"
+                  id="chaosBrand"
+                  checked={options.chaosBrand}
+                  onChange={(e) => handleOptionChange('chaosBrand', e.target.checked)}
+                />
+                <label className="form-check-label" htmlFor="chaosBrand">
+                  Chaos Brand
+                </label>
+              </div>
+              <div className="form-check">
+                <input
+                  type="checkbox"
+                  className="form-check-input"
+                  id="mysticTouch"
+                  checked={options.mysticTouch}
+                  onChange={(e) => handleOptionChange('mysticTouch', e.target.checked)}
+                />
+                <label className="form-check-label" htmlFor="mysticTouch">
+                  Mystic Touch
+                </label>
+              </div>
+              <div className="form-check">
+                <input
+                  type="checkbox"
+                  className="form-check-input"
+                  id="skyfury"
+                  checked={options.skyfury}
+                  onChange={(e) => handleOptionChange('skyfury', e.target.checked)}
+                />
+                <label className="form-check-label" htmlFor="skyfury">
+                  Skyfury Totem
+                </label>
+              </div>
+              <div className="form-check">
+                <input
+                  type="checkbox"
+                  className="form-check-input"
+                  id="huntersMark"
+                  checked={options.huntersMark}
+                  onChange={(e) => handleOptionChange('huntersMark', e.target.checked)}
+                />
+                <label className="form-check-label" htmlFor="huntersMark">
+                  Hunter's Mark
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      <div className="form-check">
+        <input
+          type="checkbox"
+          className="form-check-input"
+          id="powerInfusion"
+          checked={options.powerInfusion}
+          onChange={(e) => handleOptionChange('powerInfusion', e.target.checked)}
+        />
+        <label className="form-check-label" htmlFor="powerInfusion">
+          Power Infusion
+        </label>
+      </div>
+    </div>
+  );
+};
+
+export default AdditionalOptions;
+```
+
+`CombinationsDisplay.jsx`
+```jsx
+function CombinationsDisplay({ combinations, characterData, itemsData }) {
+  // Check if we have any combinations (including the equipped gear combination)
+  const hasCombinations = combinations && combinations.length > 0;
+  
+  // If no combinations are selected, we still have the equipped gear as a single combination
+  const totalCombinations = hasCombinations ? combinations.length : 1;
+  const hasAlternatives = hasCombinations && combinations.length > 1;
+
+  return (
+    <div className="alert alert-info mb-3">
+      <h6 className="alert-heading mb-2">
+        Ready to simulate {totalCombinations} {totalCombinations === 1 ? 'combination' : 'combinations'}
+      </h6>
+      <p className="mb-0 small">
+        {hasCombinations && hasAlternatives ? (
+          `Including your currently equipped gear and ${combinations.length - 1} ${combinations.length === 2 ? 'alternative' : 'alternatives'}`
+        ) : (
+          'Using your currently equipped gear only'
+        )}
+      </p>
+    </div>
+  );
+}
+
+export default CombinationsDisplay;
 ```
 

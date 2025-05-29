@@ -1,5 +1,3 @@
-import React from 'react';
-
 const AdditionalOptions = ({ options, onChange }) => {
   const handleOptionChange = (key, value) => {
     onChange({ ...options, [key]: value });
