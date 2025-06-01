@@ -13,113 +13,10 @@ import CollapsibleSection from './CollapsibleSection';
 import CharacterDisplay from './CharacterDisplay';
 import SimulationReport from './SimulationReport';
 import CombinationsDisplay from './CombinationsDisplay';
-import AdditionalOptions from './AdditionalOptions';
+import AdditionalOptions, { DEFAULT_OPTIONS } from './AdditionalOptions';
 import AsyncSimulationDisplay from './AsyncSimulationDisplay';
-import { ConstraintValidator } from './ClassConstraints';
+import EquipmentSection from './EquipmentSection';
 import { SimcParser } from './SimcParser';
-
-// Isolated EquipmentSection component
-const EquipmentSection = memo(({ itemsData, onCombinationsGenerated, characterInfo = null }) => {
-  const skippedSlots = ['tabard', 'shirt'];
-  const slotDisplayNames = {
-    head: 'Head',
-    neck: 'Neck',
-    shoulder: 'Shoulders',
-    back: 'Back',
-    chest: 'Chest',
-    wrist: 'Wrists',
-    hands: 'Hands',
-    waist: 'Waist',
-    legs: 'Legs',
-    feet: 'Feet',
-    finger1: 'Ring 1',
-    finger2: 'Ring 2',
-    trinket1: 'Trinket 1',
-    trinket2: 'Trinket 2',
-    main_hand: 'Main Hand',
-    off_hand: 'Off Hand'
-  };
-
-  const preparedItems = useMemo(() => {
-    if (!itemsData) return [];
-
-    return Object.entries(itemsData)
-      .filter(([slotKey, _]) => !skippedSlots.includes(slotKey))
-      .map(([slotKey, data]) => {
-        const items = [data.equipped, ...(data.alternatives || [])].filter(Boolean);
-        
-        // Apply constraints if we have character info
-        let validatedItems = items;
-        if (characterInfo?.class && characterInfo?.spec) {
-          validatedItems = items.map(item => ({
-            ...item,
-            constraints: validateItemConstraints(item, slotKey, characterInfo)
-          }));
-        }
-
-        return {
-          name: slotDisplayNames[slotKey] || slotKey.charAt(0).toUpperCase() + slotKey.slice(1).replace('_', ' '),
-          slotKey: slotKey,
-          equipped: data.equipped,
-          alternatives: data.alternatives || [],
-          validatedItems: validatedItems
-        };
-      });
-  }, [itemsData, characterInfo]);
-
-  return (
-    <CollapsibleSection title="Character Equipment">
-      <ItemSelect
-        slots={preparedItems}
-        onCombinationsGenerated={onCombinationsGenerated}
-        characterInfo={characterInfo}
-      />
-    </CollapsibleSection>
-  );
-});
-
-// Helper function to validate item constraints
-const validateItemConstraints = (item, slotKey, characterInfo) => {
-  const constraints = {
-    armor: { valid: true, constraint: 'none' },
-    weapon: { valid: true, constraint: 'none' },
-    stat: { valid: true, constraint: 'none' }
-  };
-
-  if (!item || !characterInfo?.class || !characterInfo?.spec) {
-    return constraints;
-  }
-
-  // Validate armor type for armor pieces
-  if (item.armorType && ['head', 'shoulder', 'chest', 'wrist', 'hands', 'waist', 'legs', 'feet'].includes(slotKey)) {
-    constraints.armor = ConstraintValidator.isArmorTypeValid(
-      characterInfo.class, 
-      characterInfo.spec, 
-      item.armorType
-    );
-  }
-
-  // Validate weapon type for weapon slots
-  if (item.weaponType && ['main_hand', 'off_hand'].includes(slotKey)) {
-    constraints.weapon = ConstraintValidator.isWeaponTypeValid(
-      characterInfo.class,
-      characterInfo.spec,
-      item.weaponType,
-      slotKey
-    );
-  }
-
-  // Validate primary stat
-  if (item.primaryStat) {
-    constraints.stat = ConstraintValidator.isPrimaryStatValid(
-      characterInfo.class,
-      characterInfo.spec,
-      item.primaryStat
-    );
-  }
-
-  return constraints;
-};
 
 // Simulation button component
 const SimulationButton = memo(({ canSimulate, isSimulating, onRun }) => {
@@ -149,7 +46,21 @@ const SimulationButton = memo(({ canSimulate, isSimulating, onRun }) => {
 });
 
 // Isolated SimulationResults component
-const SimulationResults = memo(({ result, downloadReport }) => {
+const SimulationResults = memo(({ result, characterName = 'character' }) => {
+  const downloadReport = useCallback(() => {
+    if (!result) return;
+
+    const blob = new Blob([result], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${characterName}_sim_report.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [result, characterName]);
+
   return (
     result && (
       <CollapsibleSection title="Simulation Results">
@@ -181,78 +92,7 @@ function Simc() {
   const characterInfoRef = useRef(null);
   const itemsDataRef = useRef(null);
   const combinationsRef = useRef([]);
-  const simOptionsRef = useRef({
-    general: {
-      fightDuration: {
-        value: 300,
-        displayName: 'Fight Duration',
-        min: 60,
-        max: 600,
-        step: 10,
-        unit: 'seconds',
-        type: 'range'
-      },
-      optimalRaidBuffs: {
-        value: true,
-        displayName: 'Use Optimal Raid Buffs',
-        type: 'checkbox'
-      }
-    },
-    buffs: {
-      // Raid buffs
-      bloodlust: {
-        value: true,
-        displayName: 'Bloodlust',
-        category: 'override'
-      },
-      arcaneIntellect: {
-        value: true,
-        displayName: 'Arcane Intellect',
-        category: 'override'
-      },
-      battleShout: {
-        value: true,
-        displayName: 'Battle Shout',
-        category: 'override'
-      },
-      markOfTheWild: {
-        value: true,
-        displayName: 'Mark of the Wild',
-        category: 'override'
-      },
-      powerWordFortitude: {
-        value: true,
-        displayName: 'Power Word: Fortitude',
-        category: 'override'
-      },
-      chaosBrand: {
-        value: true,
-        displayName: 'Chaos Brand',
-        category: 'override'
-      },
-      mysticTouch: {
-        value: true,
-        displayName: 'Mystic Touch',
-        category: 'override'
-      },
-      skyfury: {
-        value: true,
-        displayName: 'Skyfury Totem',
-        category: 'override'
-      },
-      huntersMark: {
-        value: true,
-        displayName: 'Hunter\'s Mark',
-        category: 'override'
-      },
-      // External buffs
-      powerInfusion: {
-        value: false,
-        displayName: 'Power Infusion',
-        category: 'external_buffs'
-      }
-    }
-  });
+  const simOptionsRef = useRef(DEFAULT_OPTIONS);
 
   const simulationUtilsRef = useRef({
     formatItemForSimC: (slotKey, item) => {
@@ -451,32 +291,6 @@ function Simc() {
           combinationsText += `# ${itemInfo}\n`;
         }
 
-        // Validate item constraints and add warnings
-        if (characterInfo) {
-          const constraints = validateItemConstraints(item, slotKey, characterInfo);
-          const warnings = [];
-          
-          if (!constraints.armor.valid) {
-            warnings.push('Invalid armor type');
-          } else if (constraints.armor.constraint === 'soft') {
-            warnings.push('Suboptimal armor type');
-          }
-          
-          if (!constraints.weapon.valid) {
-            warnings.push('Invalid weapon type');
-          } else if (constraints.weapon.constraint === 'soft') {
-            warnings.push('Suboptimal weapon type');
-          }
-          
-          if (constraints.stat.constraint === 'soft') {
-            warnings.push('Suboptimal primary stat');
-          }
-          
-          if (warnings.length > 0) {
-            combinationsText += `# Warning: ${warnings.join(', ')}\n`;
-          }
-        }
-
         combinationsText += `${formatItemForSimC(slotKey, item)}\n`;
       });
 
@@ -496,32 +310,6 @@ function Simc() {
 
         if (itemInfo) {
           combinationsText += `# ${itemInfo}\n`;
-        }
-
-        // Validate item constraints for combinations too
-        if (characterInfo) {
-          const constraints = validateItemConstraints(item, slotKey, characterInfo);
-          const warnings = [];
-          
-          if (!constraints.armor.valid) {
-            warnings.push('Invalid armor type');
-          } else if (constraints.armor.constraint === 'soft') {
-            warnings.push('Suboptimal armor type');
-          }
-          
-          if (!constraints.weapon.valid) {
-            warnings.push('Invalid weapon type');
-          } else if (constraints.weapon.constraint === 'soft') {
-            warnings.push('Suboptimal weapon type');
-          }
-          
-          if (constraints.stat.constraint === 'soft') {
-            warnings.push('Suboptimal primary stat');
-          }
-          
-          if (warnings.length > 0) {
-            combinationsText += `# Warning: ${warnings.join(', ')}\n`;
-          }
         }
 
         combinationsText += `${formatItemForSimC(slotKey, item)}\n`;
@@ -604,21 +392,6 @@ function Simc() {
     }
   }, [formatCombinations, addSimulationOptions]);
 
-  // Download report
-  const downloadReport = useCallback(() => {
-    if (!simulationResult || !characterDisplayData) return;
-
-    const blob = new Blob([simulationResult], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${characterDisplayData?.name || 'character'}_sim_report.html`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, [simulationResult, characterDisplayData]);
-
   // Scroll to results
   const scrollToResults = useCallback(() => {
     if (resultsRef.current) {
@@ -655,7 +428,7 @@ function Simc() {
       <div ref={resultsRef}>
         <SimulationResults
           result={simulationResult}
-          downloadReport={downloadReport}
+          characterName={characterDisplayData?.name || 'character'}
         />
       </div>
 
@@ -687,7 +460,6 @@ function Simc() {
       {hasValidData && (
         <CollapsibleSection title="Additional Options">
           <AdditionalOptions
-            options={simOptionsRef.current}
             onChange={handleOptionsChange}
           />
         </CollapsibleSection>

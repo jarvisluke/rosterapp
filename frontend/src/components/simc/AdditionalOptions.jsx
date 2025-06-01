@@ -1,22 +1,105 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, } from 'react';
 
-const AdditionalOptions = ({ options, onChange }) => {
-  // Local state for controlled inputs
+const DEFAULT_OPTIONS = {
+  general: {
+    fightDuration: {
+      value: 300,
+      displayName: 'Fight Duration',
+      min: 60,
+      max: 600,
+      step: 10,
+      unit: 'seconds',
+      type: 'range'
+    },
+    optimalRaidBuffs: {
+      value: true,
+      displayName: 'Use Optimal Raid Buffs',
+      type: 'checkbox'
+    }
+  },
+  buffs: {
+    // Raid buffs
+    bloodlust: {
+      value: true,
+      displayName: 'Bloodlust',
+      category: 'override'
+    },
+    arcaneIntellect: {
+      value: true,
+      displayName: 'Arcane Intellect',
+      category: 'override'
+    },
+    battleShout: {
+      value: true,
+      displayName: 'Battle Shout',
+      category: 'override'
+    },
+    markOfTheWild: {
+      value: true,
+      displayName: 'Mark of the Wild',
+      category: 'override'
+    },
+    powerWordFortitude: {
+      value: true,
+      displayName: 'Power Word: Fortitude',
+      category: 'override'
+    },
+    chaosBrand: {
+      value: true,
+      displayName: 'Chaos Brand',
+      category: 'override'
+    },
+    mysticTouch: {
+      value: true,
+      displayName: 'Mystic Touch',
+      category: 'override'
+    },
+    skyfury: {
+      value: true,
+      displayName: 'Skyfury Totem',
+      category: 'override'
+    },
+    huntersMark: {
+      value: true,
+      displayName: 'Hunter\'s Mark',
+      category: 'override'
+    },
+    // External buffs
+    powerInfusion: {
+      value: false,
+      displayName: 'Power Infusion',
+      category: 'external_buffs'
+    }
+  }
+};
+
+const AdditionalOptions = ({ options = DEFAULT_OPTIONS, onChange }) => {
   const [localOptions, setLocalOptions] = useState(options);
 
-  // Sync local state when options prop changes (initial load)
   useEffect(() => {
     setLocalOptions(options);
   }, [options]);
 
-  // Debounced update to parent
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      onChange(localOptions);
-    }, 300); // 300ms debounce
+  const handleChange = useCallback((section, key, newValue) => {
+    setLocalOptions(prev => {
+      const updated = {
+        ...prev,
+        [section]: {
+          ...prev[section],
+          [key]: {
+            ...prev[section][key],
+            value: newValue
+          }
+        }
+      };
 
-    return () => clearTimeout(timeoutId);
-  }, [localOptions, onChange]);
+      if (onChange) {
+        onChange(updated);
+      }
+
+      return updated;
+    });
+  }, [onChange]);
 
   const handleGeneralOptionChange = useCallback((key, value) => {
     setLocalOptions(prev => ({
@@ -154,4 +237,10 @@ const AdditionalOptions = ({ options, onChange }) => {
   );
 };
 
+AdditionalOptions.defaultProps = {
+  options: DEFAULT_OPTIONS,
+  onChange: () => {}
+};
+
 export default AdditionalOptions;
+export { DEFAULT_OPTIONS };
