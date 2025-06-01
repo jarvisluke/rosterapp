@@ -1,0 +1,3 @@
+Command: /home/jarvis/code/download/simc/simc.exe inputs/simc_20250531_023959_1450968b.simc html=simulations/simc_20250531_023959_1450968b.html
+Error: SimC exited with code 1: Herzsucher specialization string 'survival' not valid.
+Error: Unknown option 'spec' with value 'survival'.

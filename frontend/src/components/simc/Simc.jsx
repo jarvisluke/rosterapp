@@ -16,9 +16,11 @@ import SimulationReport from './SimulationReport';
 import CombinationsDisplay from './CombinationsDisplay';
 import AdditionalOptions from './AdditionalOptions';
 import AsyncSimulationDisplay from './AsyncSimulationDisplay';
+import { ConstraintValidator } from './ClassConstraints';
+import { SimcParser } from './SimcParser';
 
 // Isolated EquipmentSection component
-const EquipmentSection = memo(({ itemsData, onCombinationsGenerated }) => {
+const EquipmentSection = memo(({ itemsData, onCombinationsGenerated, characterInfo = null }) => {
   const skippedSlots = ['tabard', 'shirt'];
   const slotDisplayNames = {
     head: 'Head',
@@ -45,24 +47,80 @@ const EquipmentSection = memo(({ itemsData, onCombinationsGenerated }) => {
     return Object.entries(itemsData)
       .filter(([slotKey, _]) => !skippedSlots.includes(slotKey))
       .map(([slotKey, data]) => {
+        const items = [data.equipped, ...(data.alternatives || [])].filter(Boolean);
+        
+        // Apply constraints if we have character info
+        let validatedItems = items;
+        if (characterInfo?.class && characterInfo?.spec) {
+          validatedItems = items.map(item => ({
+            ...item,
+            constraints: validateItemConstraints(item, slotKey, characterInfo)
+          }));
+        }
+
         return {
           name: slotDisplayNames[slotKey] || slotKey.charAt(0).toUpperCase() + slotKey.slice(1).replace('_', ' '),
           slotKey: slotKey,
           equipped: data.equipped,
-          alternatives: data.alternatives || []
+          alternatives: data.alternatives || [],
+          validatedItems: validatedItems
         };
       });
-  }, [itemsData]);
+  }, [itemsData, characterInfo]);
 
   return (
     <CollapsibleSection title="Character Equipment">
       <ItemSelect
         slots={preparedItems}
         onCombinationsGenerated={onCombinationsGenerated}
+        characterInfo={characterInfo}
       />
     </CollapsibleSection>
   );
 });
+
+// Helper function to validate item constraints
+const validateItemConstraints = (item, slotKey, characterInfo) => {
+  const constraints = {
+    armor: { valid: true, constraint: 'none' },
+    weapon: { valid: true, constraint: 'none' },
+    stat: { valid: true, constraint: 'none' }
+  };
+
+  if (!item || !characterInfo?.class || !characterInfo?.spec) {
+    return constraints;
+  }
+
+  // Validate armor type for armor pieces
+  if (item.armorType && ['head', 'shoulder', 'chest', 'wrist', 'hands', 'waist', 'legs', 'feet'].includes(slotKey)) {
+    constraints.armor = ConstraintValidator.isArmorTypeValid(
+      characterInfo.class, 
+      characterInfo.spec, 
+      item.armorType
+    );
+  }
+
+  // Validate weapon type for weapon slots
+  if (item.weaponType && ['main_hand', 'off_hand'].includes(slotKey)) {
+    constraints.weapon = ConstraintValidator.isWeaponTypeValid(
+      characterInfo.class,
+      characterInfo.spec,
+      item.weaponType,
+      slotKey
+    );
+  }
+
+  // Validate primary stat
+  if (item.primaryStat) {
+    constraints.stat = ConstraintValidator.isPrimaryStatValid(
+      characterInfo.class,
+      characterInfo.spec,
+      item.primaryStat
+    );
+  }
+
+  return constraints;
+};
 
 // Simulation button component
 const SimulationButton = memo(({ canSimulate, isSimulating, onRun }) => {
@@ -121,22 +179,81 @@ function Simc() {
   const [currentJobId, setCurrentJobId] = useState(null);
   const [realmIndex, setRealmIndex] = useState(null);
   const [isLoadingRealms, setIsLoadingRealms] = useState(true);
+  const [characterInfo, setCharacterInfo] = useState(null);
 
   // Refs for data that doesn't affect rendering
   const combinationsRef = useRef([]);
   const simOptionsRef = useRef({
-    fightDuration: 300,
-    optimalRaidBuffs: true,
-    bloodlust: true,
-    arcaneIntellect: true,
-    battleShout: true,
-    markOfTheWild: true,
-    powerWordFortitude: true,
-    chaosBrand: true,
-    mysticTouch: true,
-    skyfury: true,
-    huntersMark: true,
-    powerInfusion: false
+    general: {
+      fightDuration: {
+        value: 300,
+        displayName: 'Fight Duration',
+        min: 60,
+        max: 600,
+        step: 10,
+        unit: 'seconds',
+        type: 'range'
+      },
+      optimalRaidBuffs: {
+        value: true,
+        displayName: 'Use Optimal Raid Buffs',
+        type: 'checkbox'
+      }
+    },
+    buffs: {
+      // Raid buffs
+      bloodlust: {
+        value: true,
+        displayName: 'Bloodlust',
+        category: 'override'
+      },
+      arcaneIntellect: {
+        value: true,
+        displayName: 'Arcane Intellect',
+        category: 'override'
+      },
+      battleShout: {
+        value: true,
+        displayName: 'Battle Shout',
+        category: 'override'
+      },
+      markOfTheWild: {
+        value: true,
+        displayName: 'Mark of the Wild',
+        category: 'override'
+      },
+      powerWordFortitude: {
+        value: true,
+        displayName: 'Power Word: Fortitude',
+        category: 'override'
+      },
+      chaosBrand: {
+        value: true,
+        displayName: 'Chaos Brand',
+        category: 'override'
+      },
+      mysticTouch: {
+        value: true,
+        displayName: 'Mystic Touch',
+        category: 'override'
+      },
+      skyfury: {
+        value: true,
+        displayName: 'Skyfury Totem',
+        category: 'override'
+      },
+      huntersMark: {
+        value: true,
+        displayName: 'Hunter\'s Mark',
+        category: 'override'
+      },
+      // External buffs
+      powerInfusion: {
+        value: false,
+        displayName: 'Power Infusion',
+        category: 'external_buffs'
+      }
+    }
   });
 
   const simulationDataRef = useRef({
@@ -168,57 +285,6 @@ function Simc() {
       }
 
       return output;
-    },
-    extractCharacterInfo: (simcInput) => {
-      const charInfo = [];
-      const lines = simcInput.split('\n');
-
-      let detectedClass = '';
-      for (const line of lines) {
-        if (line.startsWith('spec=')) {
-          const spec = line.substring(5).toLowerCase();
-          const specClassMap = {
-            subtlety: 'rogue',
-            assassination: 'rogue',
-            outlaw: 'rogue',
-          };
-          detectedClass = specClassMap[spec] || '';
-          break;
-        }
-      }
-
-      let characterName = 'Character';
-      const commentLine = lines.find(line => line.startsWith('#'));
-      if (commentLine) {
-        const match = commentLine.match(/^#\s*([^\s-]+)/);
-        if (match && match[1]) {
-          characterName = match[1];
-        }
-      }
-
-      if (detectedClass) {
-        charInfo.push(`${detectedClass}="${characterName}"`);
-      } else {
-        charInfo.push(`rogue="${characterName}"`);
-      }
-
-      const settingsToExtract = [
-        'level=', 'race=', 'region=', 'server=', 'role=', 'professions=',
-        'spec=', 'talents=', 'covenant=', 'soulbind='
-      ];
-
-      lines.forEach(line => {
-        if (!line.startsWith('#') && !line.startsWith('//')) {
-          for (const setting of settingsToExtract) {
-            if (line.startsWith(setting)) {
-              charInfo.push(line.trim());
-              break;
-            }
-          }
-        }
-      });
-
-      return charInfo.join('\n');
     },
     createEquippedCombination: (itemsData) => {
       if (!itemsData) return null;
@@ -289,6 +355,42 @@ function Simc() {
     fetchRealms();
   }, []);
 
+  // Extract character info when simc input changes
+  useEffect(() => {
+    if (simcInput && inputMode === 'addon') {
+      try {
+        const extractedInfo = SimcParser.extractCharacterInfo(simcInput);
+        const validation = SimcParser.validateCharacterInfo(extractedInfo);
+        
+        if (validation.valid) {
+          setCharacterInfo(extractedInfo);
+        } else {
+          console.warn('Invalid character info:', validation.error);
+          setCharacterInfo(null);
+        }
+      } catch (error) {
+        console.error('Error parsing character info:', error);
+        setCharacterInfo(null);
+      }
+    } else if (inputMode === 'armory' && characterData) {
+      // For armory mode, try to extract info from characterData
+      const extractedInfo = {
+        class: characterData.character_class?.toLowerCase(),
+        spec: characterData.active_spec?.toLowerCase(),
+        name: characterData.name,
+        level: characterData.level,
+        race: characterData.race?.toLowerCase(),
+        region: characterData.region,
+        server: characterData.realm?.name
+      };
+      
+      const validation = SimcParser.validateCharacterInfo(extractedInfo);
+      if (validation.valid) {
+        setCharacterInfo(extractedInfo);
+      }
+    }
+  }, [simcInput, inputMode, characterData]);
+
   const handleDataUpdate = useCallback((data) => {
     if (data) {
       setCharacterData(data.character);
@@ -307,59 +409,67 @@ function Simc() {
     combinationsRef.current = newCombinations;
   }, []);
 
-  const handleOptionsChange = useCallback((newOptions) => {
-    simOptionsRef.current = newOptions;
-  }, []);
-
-  const canSimulate = useMemo(() => {
-    return characterData && (
-      (inputMode === 'addon' && simcInput) ||
-      (inputMode === 'armory' && characterData.name && characterData.realm?.name)
-    );
-  }, [characterData, inputMode, simcInput]);
-
   const addSimulationOptions = useCallback((inputText) => {
     const options = simOptionsRef.current;
     let optionsArr = [];
 
     // General options
-    optionsArr.push(`max_time=${options.fightDuration}`);
+    optionsArr.push(`max_time=${options.general.fightDuration.value}`);
 
-    // Handle raid buffs
-    if (!options.optimalRaidBuffs) {
+    // Handle buffs based on optimalRaidBuffs setting
+    if (!options.general.optimalRaidBuffs.value) {
       optionsArr.push('optimal_raid=0');
 
-      // Iterate through all options to find raid buffs
-      Object.entries(options).forEach(([key, value]) => {
-        // Skip non-buff options
-        if (key === 'fightDuration' || key === 'optimalRaidBuffs' || key === 'powerInfusion') {
-          return;
+      // Add all override buffs (raid buffs)
+      Object.entries(options.buffs).forEach(([id, buff]) => {
+        if (buff.category === 'override') {
+          const simcKey = id.replace(/([A-Z])/g, '_$1').toLowerCase();
+          optionsArr.push(`${buff.category}.${simcKey}=${buff.value ? 1 : 0}`);
         }
-
-        const formattedKey = key.replace(/([A-Z])/g, '_$1').toLowerCase();
-        optionsArr.push(`override.${formattedKey}=${value ? 1 : 0}`);
       });
     }
 
-    // Handle power infusion (special case with external_buffs prefix)
-    if ('powerInfusion' in options) {
-      const formattedKey = 'powerInfusion'.replace(/([A-Z])/g, '_$1').toLowerCase();
-      optionsArr.push(`external_buffs.${formattedKey}=${options.powerInfusion ? 1 : 0}`);
-    }
+    // Add external buffs (always included)
+    Object.entries(options.buffs).forEach(([id, buff]) => {
+      if (buff.category === 'external_buffs') {
+        const simcKey = id.replace(/([A-Z])/g, '_$1').toLowerCase();
+        optionsArr.push(`${buff.category}.${simcKey}=${buff.value ? 1 : 0}`);
+      }
+    });
 
     return `${inputText}\n\n# Simulation Options\n${optionsArr.join('\n')}`;
+  }, []);
+
+  const handleOptionsChange = useCallback((newOptions) => {
+    simOptionsRef.current = newOptions;
   }, []);
 
   const formatCombinations = useCallback(() => {
     const combinations = combinationsRef.current;
     if (!combinations.length) return '';
 
-    const { extractCharacterInfo, createEquippedCombination, formatItemForSimC } = simulationDataRef.current;
+    const { createEquippedCombination, formatItemForSimC } = simulationDataRef.current;
 
     let combinationsText = '';
-    const characterInfo = extractCharacterInfo(simcInput);
+    
+    // Use SimcParser to extract character info
+    const characterInfoString = characterInfo ? 
+      SimcParser.createCharacterInfoString(characterInfo) :
+      SimcParser.extractCharacterInfo(simcInput);
 
-    combinationsText += `${characterInfo}\n\n`;
+    combinationsText += `${characterInfoString}\n\n`;
+
+    // Extract talents and other settings from original input
+    const lines = simcInput.split('\n');
+    const additionalSettings = lines.filter(line => {
+      if (line.startsWith('#') || line.startsWith('//')) return true;
+      if (line.startsWith('talents=') || line.startsWith('professions=')) return true;
+      return false;
+    });
+
+    if (additionalSettings.length > 0) {
+      combinationsText += additionalSettings.join('\n') + '\n\n';
+    }
 
     const equippedGear = createEquippedCombination(itemsData);
     if (equippedGear) {
@@ -373,6 +483,32 @@ function Simc() {
 
         if (itemInfo) {
           combinationsText += `# ${itemInfo}\n`;
+        }
+
+        // Validate item constraints and add warnings
+        if (characterInfo) {
+          const constraints = validateItemConstraints(item, slotKey, characterInfo);
+          const warnings = [];
+          
+          if (!constraints.armor.valid) {
+            warnings.push('Invalid armor type');
+          } else if (constraints.armor.constraint === 'soft') {
+            warnings.push('Suboptimal armor type');
+          }
+          
+          if (!constraints.weapon.valid) {
+            warnings.push('Invalid weapon type');
+          } else if (constraints.weapon.constraint === 'soft') {
+            warnings.push('Suboptimal weapon type');
+          }
+          
+          if (constraints.stat.constraint === 'soft') {
+            warnings.push('Suboptimal primary stat');
+          }
+          
+          if (warnings.length > 0) {
+            combinationsText += `# Warning: ${warnings.join(', ')}\n`;
+          }
         }
 
         combinationsText += `${formatItemForSimC(slotKey, item)}\n`;
@@ -395,6 +531,32 @@ function Simc() {
           combinationsText += `# ${itemInfo}\n`;
         }
 
+        // Validate item constraints for combinations too
+        if (characterInfo) {
+          const constraints = validateItemConstraints(item, slotKey, characterInfo);
+          const warnings = [];
+          
+          if (!constraints.armor.valid) {
+            warnings.push('Invalid armor type');
+          } else if (constraints.armor.constraint === 'soft') {
+            warnings.push('Suboptimal armor type');
+          }
+          
+          if (!constraints.weapon.valid) {
+            warnings.push('Invalid weapon type');
+          } else if (constraints.weapon.constraint === 'soft') {
+            warnings.push('Suboptimal weapon type');
+          }
+          
+          if (constraints.stat.constraint === 'soft') {
+            warnings.push('Suboptimal primary stat');
+          }
+          
+          if (warnings.length > 0) {
+            combinationsText += `# Warning: ${warnings.join(', ')}\n`;
+          }
+        }
+
         combinationsText += `${formatItemForSimC(slotKey, item)}\n`;
       });
 
@@ -402,11 +564,17 @@ function Simc() {
     });
 
     return addSimulationOptions(combinationsText);
-  }, [simcInput, itemsData, addSimulationOptions]);
+  }, [simcInput, itemsData, characterInfo, addSimulationOptions]);
+
+  const canSimulate = useMemo(() => {
+    return characterData && (
+      (inputMode === 'addon' && simcInput) ||
+      (inputMode === 'armory' && characterData.name && characterData.realm?.name)
+    );
+  }, [characterData, inputMode, simcInput]);
 
   const runSimulation = useCallback(async () => {
     if (!characterData) return;
-    const { extractCharacterInfo } = simulationDataRef.current;
 
     setIsSimulating(true);
 
@@ -418,7 +586,9 @@ function Simc() {
           input = formatCombinations();
         } else {
           const lines = simcInput.split('\n').filter(line => !line.startsWith('Simulation input:'));
-          const characterInfo = extractCharacterInfo(simcInput);
+          const characterInfoString = characterInfo ? 
+            SimcParser.createCharacterInfoString(characterInfo) :
+            SimcParser.extractCharacterInfo(simcInput);
 
           const remainingLines = lines.filter(line => {
             if (line.startsWith('#') || line.startsWith('//')) return true;
@@ -429,7 +599,7 @@ function Simc() {
             return true;
           });
 
-          input = characterInfo + '\n\n' + remainingLines.join('\n');
+          input = characterInfoString + '\n\n' + remainingLines.join('\n');
           input = addSimulationOptions(input);
         }
       } else {
@@ -469,7 +639,7 @@ function Simc() {
       alert(errorMessage + (error.data?.detail ? `: ${error.data.detail}` : ''));
       setIsSimulating(false);
     }
-  }, [characterData, inputMode, simcInput, formatCombinations, addSimulationOptions]);
+  }, [characterData, inputMode, simcInput, characterInfo, formatCombinations, addSimulationOptions]);
 
   const downloadReport = useCallback(() => {
     if (!simulationResult) return;
@@ -506,6 +676,14 @@ function Simc() {
     setIsSimulating(false);
   }, []);
 
+  const resetState = useCallback(() => {
+    setCharacterData(null);
+    setItemsData(null);
+    setSimcInput('');
+    setCharacterInfo(null);
+    combinationsRef.current = [];
+  }, []);
+
   return (
     <div className="container mt-3 pb-5 mb-5">
       {currentJobId && (
@@ -533,9 +711,7 @@ function Simc() {
           checked={inputMode === 'addon'}
           onChange={(e) => {
             setInputMode(e.target.value);
-            setCharacterData(null);
-            setItemsData(null);
-            setSimcInput('');
+            resetState();
           }}
         />
         <label className="btn btn-outline-primary me-2" htmlFor="addon_radio">SimC Addon</label>
@@ -549,9 +725,7 @@ function Simc() {
           checked={inputMode === 'armory'}
           onChange={(e) => {
             setInputMode(e.target.value);
-            setCharacterData(null);
-            setItemsData(null);
-            setSimcInput('');
+            resetState();
           }}
         />
         <label className="btn btn-outline-primary" htmlFor="armory_radio">Armory</label>
@@ -573,12 +747,13 @@ function Simc() {
         />
       )}
 
-      <CharacterDisplay character={characterData} />
+      <CharacterDisplay character={characterData} characterInfo={characterInfo} />
 
       {characterData && (
         <EquipmentSection
           itemsData={itemsData}
           onCombinationsGenerated={handleCombinationsUpdate}
+          characterInfo={characterInfo}
         />
       )}
 
@@ -597,6 +772,7 @@ function Simc() {
             combinations={combinationsRef.current}
             characterData={characterData}
             itemsData={itemsData}
+            characterInfo={characterInfo}
             onCombinationsChange={handleCombinationsUpdate}
           />
         </CollapsibleSection>

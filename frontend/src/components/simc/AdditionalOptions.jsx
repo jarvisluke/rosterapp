@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 
 const AdditionalOptions = ({ options, onChange }) => {
   // Local state for controlled inputs
@@ -18,172 +18,138 @@ const AdditionalOptions = ({ options, onChange }) => {
     return () => clearTimeout(timeoutId);
   }, [localOptions, onChange]);
 
-  const handleOptionChange = useCallback((key, value) => {
-    setLocalOptions(prev => ({ ...prev, [key]: value }));
+  const handleGeneralOptionChange = useCallback((key, value) => {
+    setLocalOptions(prev => ({
+      ...prev,
+      general: {
+        ...prev.general,
+        [key]: {
+          ...prev.general[key],
+          value: value
+        }
+      }
+    }));
   }, []);
 
+  const handleBuffChange = useCallback((buffId, value) => {
+    setLocalOptions(prev => ({
+      ...prev,
+      buffs: {
+        ...prev.buffs,
+        [buffId]: {
+          ...prev.buffs[buffId],
+          value: value
+        }
+      }
+    }));
+  }, []);
+
+  // Memoized grouping of buffs by category
+  const buffsByCategory = useMemo(() => {
+    return Object.entries(localOptions.buffs).reduce((acc, [id, buff]) => {
+      if (!acc[buff.category]) acc[buff.category] = [];
+      acc[buff.category].push({ id, ...buff });
+      return acc;
+    }, {});
+  }, [localOptions.buffs]);
+
   return (
-    <div className="additional-options">
-      <div className="mb-3">
-        <label htmlFor="fightDuration" className="form-label">
-          Fight Duration: {localOptions.fightDuration} seconds
-        </label>
-        <input
-          type="range"
-          className="form-range"
-          id="fightDuration"
-          min="60"
-          max="600"
-          step="10"
-          value={localOptions.fightDuration}
-          onChange={(e) => handleOptionChange('fightDuration', parseInt(e.target.value))}
-        />
-      </div>
+    <div className="additional-options ms-3">
+      {/* General Options */}
+      {Object.entries(localOptions.general).map(([key, option]) => (
+        <div key={key} className="mb-3">
+          {option.type === 'range' ? (
+            <>
+              <label htmlFor={key} className="form-label">
+                {option.displayName}: {option.value} {option.unit || ''}
+              </label>
+              <input
+                type="range"
+                className="form-range"
+                id={key}
+                min={option.min || 0}
+                max={option.max || 100}
+                step={option.step || 1}
+                value={option.value}
+                onChange={(e) => handleGeneralOptionChange(key, Number(e.target.value))}
+              />
+            </>
+          ) : option.type === 'checkbox' ? (
+            <div className="form-check">
+              <input
+                type="checkbox"
+                className="form-check-input"
+                id={key}
+                checked={option.value}
+                onChange={(e) => handleGeneralOptionChange(key, e.target.checked)}
+              />
+              <label className="form-check-label" htmlFor={key}>
+                {option.displayName}
+              </label>
+            </div>
+          ) : null}
+        </div>
+      ))}
 
-      <div className="mb-3 form-check">
-        <input
-          type="checkbox"
-          className="form-check-input"
-          id="optimalRaidBuffs"
-          checked={localOptions.optimalRaidBuffs}
-          onChange={(e) => handleOptionChange('optimalRaidBuffs', e.target.checked)}
-        />
-        <label className="form-check-label" htmlFor="optimalRaidBuffs">
-          Use Optimal Raid Buffs
-        </label>
-      </div>
-
-      {!localOptions.optimalRaidBuffs && (
+      {/* Override Buffs (raid buffs - if not using optimal raid buffs) */}
+      {!localOptions.general.optimalRaidBuffs.value && buffsByCategory.override && (
         <div className="raid-buffs-container ms-4 mb-3">
           <div className="row">
             <div className="col-md-6">
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="bloodlust"
-                  checked={localOptions.bloodlust}
-                  onChange={(e) => handleOptionChange('bloodlust', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="bloodlust">
-                  Bloodlust / Heroism
-                </label>
-              </div>
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="arcaneIntellect"
-                  checked={localOptions.arcaneIntellect}
-                  onChange={(e) => handleOptionChange('arcaneIntellect', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="arcaneIntellect">
-                  Arcane Intellect
-                </label>
-              </div>
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="battleShout"
-                  checked={localOptions.battleShout}
-                  onChange={(e) => handleOptionChange('battleShout', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="battleShout">
-                  Battle Shout
-                </label>
-              </div>
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="markOfTheWild"
-                  checked={localOptions.markOfTheWild}
-                  onChange={(e) => handleOptionChange('markOfTheWild', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="markOfTheWild">
-                  Mark of the Wild
-                </label>
-              </div>
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="powerWordFortitude"
-                  checked={localOptions.powerWordFortitude}
-                  onChange={(e) => handleOptionChange('powerWordFortitude', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="powerWordFortitude">
-                  Power Word: Fortitude
-                </label>
-              </div>
+              {buffsByCategory.override.slice(0, Math.ceil(buffsByCategory.override.length / 2)).map(buff => (
+                <div key={buff.id} className="form-check">
+                  <input
+                    type="checkbox"
+                    className="form-check-input"
+                    id={buff.id}
+                    checked={buff.value}
+                    onChange={(e) => handleBuffChange(buff.id, e.target.checked)}
+                  />
+                  <label className="form-check-label" htmlFor={buff.id}>
+                    {buff.displayName}
+                  </label>
+                </div>
+              ))}
             </div>
             <div className="col-md-6">
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="chaosBrand"
-                  checked={localOptions.chaosBrand}
-                  onChange={(e) => handleOptionChange('chaosBrand', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="chaosBrand">
-                  Chaos Brand
-                </label>
-              </div>
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="mysticTouch"
-                  checked={localOptions.mysticTouch}
-                  onChange={(e) => handleOptionChange('mysticTouch', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="mysticTouch">
-                  Mystic Touch
-                </label>
-              </div>
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="skyfury"
-                  checked={localOptions.skyfury}
-                  onChange={(e) => handleOptionChange('skyfury', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="skyfury">
-                  Skyfury Totem
-                </label>
-              </div>
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="huntersMark"
-                  checked={localOptions.huntersMark}
-                  onChange={(e) => handleOptionChange('huntersMark', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="huntersMark">
-                  Hunter's Mark
-                </label>
-              </div>
+              {buffsByCategory.override.slice(Math.ceil(buffsByCategory.override.length / 2)).map(buff => (
+                <div key={buff.id} className="form-check">
+                  <input
+                    type="checkbox"
+                    className="form-check-input"
+                    id={buff.id}
+                    checked={buff.value}
+                    onChange={(e) => handleBuffChange(buff.id, e.target.checked)}
+                  />
+                  <label className="form-check-label" htmlFor={buff.id}>
+                    {buff.displayName}
+                  </label>
+                </div>
+              ))}
             </div>
           </div>
         </div>
       )}
-      
-      <div className="form-check">
-        <input
-          type="checkbox"
-          className="form-check-input"
-          id="powerInfusion"
-          checked={localOptions.powerInfusion}
-          onChange={(e) => handleOptionChange('powerInfusion', e.target.checked)}
-        />
-        <label className="form-check-label" htmlFor="powerInfusion">
-          Power Infusion
-        </label>
-      </div>
+
+      {/* External Buffs (always shown) */}
+      {buffsByCategory.external_buffs && (
+        <div className="external-buffs-container mb-3">
+          {buffsByCategory.external_buffs.map(buff => (
+            <div key={buff.id} className="form-check">
+              <input
+                type="checkbox"
+                className="form-check-input"
+                id={buff.id}
+                checked={buff.value}
+                onChange={(e) => handleBuffChange(buff.id, e.target.checked)}
+              />
+              <label className="form-check-label" htmlFor={buff.id}>
+                {buff.displayName}
+              </label>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

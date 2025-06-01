@@ -1,0 +1,2 @@
+Command: /home/jarvis/code/download/simc/simc.exe inputs/simc_20250529_225300_a7446cc0.simc html=simulations/simc_20250529_225300_a7446cc0.html
+Error: SimC exited with code 1: Error: Option 'max_time' with value 'undefined': Could not parse 'undefined' to double: invalid input string
