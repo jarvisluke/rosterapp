@@ -7,7 +7,6 @@ import {
   memo
 } from 'react';
 import AddonInput from './AddonInput';
-import ArmoryInput from './ArmoryInput';
 import ItemSelect from './ItemSelect';
 import { apiClient, ApiError } from '../../util/api';
 import CollapsibleSection from './CollapsibleSection';
@@ -169,19 +168,18 @@ const SimulationResults = memo(({ result, downloadReport }) => {
 });
 
 function Simc() {
-  // Core state
-  const [inputMode, setInputMode] = useState('addon');
-  const [characterData, setCharacterData] = useState(null);
-  const [itemsData, setItemsData] = useState(null);
-  const [simcInput, setSimcInput] = useState('');
+  // UI State only - things that affect rendering
   const [simulationResult, setSimulationResult] = useState(null);
   const [isSimulating, setIsSimulating] = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
-  const [realmIndex, setRealmIndex] = useState(null);
-  const [isLoadingRealms, setIsLoadingRealms] = useState(true);
-  const [characterInfo, setCharacterInfo] = useState(null);
+  const [hasValidData, setHasValidData] = useState(false);
+  const [characterDisplayData, setCharacterDisplayData] = useState(null);
+  const [parseError, setParseError] = useState(null);
 
-  // Refs for data that doesn't affect rendering
+  // Data refs - things that don't need to trigger re-renders
+  const rawSimcInputRef = useRef('');
+  const characterInfoRef = useRef(null);
+  const itemsDataRef = useRef(null);
   const combinationsRef = useRef([]);
   const simOptionsRef = useRef({
     general: {
@@ -256,7 +254,7 @@ function Simc() {
     }
   });
 
-  const simulationDataRef = useRef({
+  const simulationUtilsRef = useRef({
     formatItemForSimC: (slotKey, item) => {
       if (!item) return '';
 
@@ -305,110 +303,79 @@ function Simc() {
       });
 
       return equippedGear;
-    },
-    pairedSlots: {
-      main_hand: 'off_hand',
-      off_hand: 'main_hand',
-      finger1: 'finger2',
-      finger2: 'finger1',
-      trinket1: 'trinket2',
-      trinket2: 'trinket1'
     }
   });
 
   const resultsRef = useRef(null);
 
-  useEffect(() => {
-    const fetchRealms = async () => {
-      setIsLoadingRealms(true);
-      try {
-        const data = await apiClient.get('/api/realms', {
-          cache: true,
-          cacheTTL: 1000 * 60 * 60 * 24,
-          retries: 2,
-          retryDelay: 1000,
-        });
-        setRealmIndex(data);
-      } catch (error) {
-        console.error('Error fetching realms:', error);
+  // Parse and validate data whenever input changes
+  const parseAndValidateData = useCallback((data) => {
+    if (!data || !data.rawInput) {
+      // Clear all data
+      rawSimcInputRef.current = '';
+      characterInfoRef.current = null;
+      itemsDataRef.current = null;
+      combinationsRef.current = [];
+      setCharacterDisplayData(null);
+      setHasValidData(false);
+      setParseError(null);
+      return;
+    }
 
-        if (error instanceof ApiError) {
-          let errorMessage = 'Failed to load realm data.';
+    try {
+      // Store raw input
+      rawSimcInputRef.current = data.rawInput;
 
-          if (error.isNetworkError) {
-            errorMessage = 'Network error while loading realm data. Please check your connection.';
-          } else if (error.isTimeoutError) {
-            errorMessage = 'Timeout while loading realm data. Please try again.';
-          } else if (error.isServerError) {
-            errorMessage = 'Server error while loading realm data. Please try again later.';
-          }
-
-          if (!error.isNetworkError || process.env.NODE_ENV === 'development') {
-            alert(errorMessage);
-          }
-        }
-      } finally {
-        setIsLoadingRealms(false);
+      // Extract and validate character info using SimcParser
+      const extractedCharacterInfo = SimcParser.extractCharacterInfo(data.rawInput);
+      const validation = SimcParser.validateCharacterInfo(extractedCharacterInfo);
+      
+      if (!validation.valid) {
+        throw new Error(`Character validation failed: ${validation.error}`);
       }
-    };
 
-    fetchRealms();
+      // Store validated data in refs
+      characterInfoRef.current = extractedCharacterInfo;
+      itemsDataRef.current = data.items;
+      
+      // Set display data for components that need to re-render
+      setCharacterDisplayData(data.character);
+      setHasValidData(true);
+      setParseError(null);
+
+      console.log('Parsed character info:', extractedCharacterInfo);
+      console.log('Items data:', data.items);
+
+    } catch (error) {
+      console.error('Error parsing SimC data:', error);
+      
+      // Clear data on error
+      characterInfoRef.current = null;
+      itemsDataRef.current = null;
+      combinationsRef.current = [];
+      setCharacterDisplayData(null);
+      setHasValidData(false);
+      setParseError(error.message);
+    }
   }, []);
 
-  // Extract character info when simc input changes
-  useEffect(() => {
-    if (simcInput && inputMode === 'addon') {
-      try {
-        const extractedInfo = SimcParser.extractCharacterInfo(simcInput);
-        const validation = SimcParser.validateCharacterInfo(extractedInfo);
-        
-        if (validation.valid) {
-          setCharacterInfo(extractedInfo);
-        } else {
-          console.warn('Invalid character info:', validation.error);
-          setCharacterInfo(null);
-        }
-      } catch (error) {
-        console.error('Error parsing character info:', error);
-        setCharacterInfo(null);
-      }
-    } else if (inputMode === 'armory' && characterData) {
-      // For armory mode, try to extract info from characterData
-      const extractedInfo = {
-        class: characterData.character_class?.toLowerCase(),
-        spec: characterData.active_spec?.toLowerCase(),
-        name: characterData.name,
-        level: characterData.level,
-        race: characterData.race?.toLowerCase(),
-        region: characterData.region,
-        server: characterData.realm?.name
-      };
-      
-      const validation = SimcParser.validateCharacterInfo(extractedInfo);
-      if (validation.valid) {
-        setCharacterInfo(extractedInfo);
-      }
-    }
-  }, [simcInput, inputMode, characterData]);
-
+  // Handle data updates from AddonInput
   const handleDataUpdate = useCallback((data) => {
-    if (data) {
-      setCharacterData(data.character);
-      setItemsData(data.items);
-      if (inputMode === 'addon') {
-        setSimcInput(data.rawInput);
-      }
-    } else {
-      setCharacterData(null);
-      setItemsData(null);
-      setSimcInput('');
-    }
-  }, [inputMode]);
+    parseAndValidateData(data);
+  }, [parseAndValidateData]);
 
+  // Handle combinations updates
   const handleCombinationsUpdate = useCallback((newCombinations) => {
     combinationsRef.current = newCombinations;
+    console.log(`Updated combinations: ${newCombinations.length} combinations`);
   }, []);
 
+  // Handle options changes
+  const handleOptionsChange = useCallback((newOptions) => {
+    simOptionsRef.current = newOptions;
+  }, []);
+
+  // Add simulation options to input text
   const addSimulationOptions = useCallback((inputText) => {
     const options = simOptionsRef.current;
     let optionsArr = [];
@@ -440,27 +407,25 @@ function Simc() {
     return `${inputText}\n\n# Simulation Options\n${optionsArr.join('\n')}`;
   }, []);
 
-  const handleOptionsChange = useCallback((newOptions) => {
-    simOptionsRef.current = newOptions;
-  }, []);
-
+  // Format combinations for simulation
   const formatCombinations = useCallback(() => {
     const combinations = combinationsRef.current;
-    if (!combinations.length) return '';
+    const characterInfo = characterInfoRef.current;
+    const itemsData = itemsDataRef.current;
+    const rawInput = rawSimcInputRef.current;
 
-    const { createEquippedCombination, formatItemForSimC } = simulationDataRef.current;
+    if (!combinations.length || !characterInfo || !itemsData) return '';
+
+    const { createEquippedCombination, formatItemForSimC } = simulationUtilsRef.current;
 
     let combinationsText = '';
     
-    // Use SimcParser to extract character info
-    const characterInfoString = characterInfo ? 
-      SimcParser.createCharacterInfoString(characterInfo) :
-      SimcParser.extractCharacterInfo(simcInput);
-
+    // Create character info string
+    const characterInfoString = SimcParser.createCharacterInfoString(characterInfo);
     combinationsText += `${characterInfoString}\n\n`;
 
     // Extract talents and other settings from original input
-    const lines = simcInput.split('\n');
+    const lines = rawInput.split('\n');
     const additionalSettings = lines.filter(line => {
       if (line.startsWith('#') || line.startsWith('//')) return true;
       if (line.startsWith('talents=') || line.startsWith('professions=')) return true;
@@ -471,6 +436,7 @@ function Simc() {
       combinationsText += additionalSettings.join('\n') + '\n\n';
     }
 
+    // Add equipped combination first
     const equippedGear = createEquippedCombination(itemsData);
     if (equippedGear) {
       combinationsText += `copy="Equipped"\n`;
@@ -517,6 +483,7 @@ function Simc() {
       combinationsText += '\n';
     }
 
+    // Add alternative combinations
     combinations.forEach((combo, index) => {
       const comboNumber = index + 1;
       combinationsText += `copy="Combo ${comboNumber}"\n`;
@@ -564,56 +531,52 @@ function Simc() {
     });
 
     return addSimulationOptions(combinationsText);
-  }, [simcInput, itemsData, characterInfo, addSimulationOptions]);
+  }, [addSimulationOptions]);
 
+  // Check if we can simulate
   const canSimulate = useMemo(() => {
-    return characterData && (
-      (inputMode === 'addon' && simcInput) ||
-      (inputMode === 'armory' && characterData.name && characterData.realm?.name)
-    );
-  }, [characterData, inputMode, simcInput]);
+    return hasValidData && characterInfoRef.current && rawSimcInputRef.current;
+  }, [hasValidData]);
 
+  // Run simulation
   const runSimulation = useCallback(async () => {
-    if (!characterData) return;
+    const characterInfo = characterInfoRef.current;
+    const rawInput = rawSimcInputRef.current;
+
+    if (!characterInfo || !rawInput) return;
 
     setIsSimulating(true);
 
     try {
       let input;
 
-      if (inputMode === 'addon') {
-        if (combinationsRef.current.length > 0) {
-          input = formatCombinations();
-        } else {
-          const lines = simcInput.split('\n').filter(line => !line.startsWith('Simulation input:'));
-          const characterInfoString = characterInfo ? 
-            SimcParser.createCharacterInfoString(characterInfo) :
-            SimcParser.extractCharacterInfo(simcInput);
-
-          const remainingLines = lines.filter(line => {
-            if (line.startsWith('#') || line.startsWith('//')) return true;
-            if (['level=', 'race=', 'region=', 'server=', 'role=', 'professions=',
-              'spec=', 'talents=', 'covenant=', 'soulbind='].some(s => line.startsWith(s))) {
-              return false;
-            }
-            return true;
-          });
-
-          input = characterInfoString + '\n\n' + remainingLines.join('\n');
-          input = addSimulationOptions(input);
-        }
+      if (combinationsRef.current.length > 0) {
+        input = formatCombinations();
       } else {
-        input = `armory=${characterData.region},${characterData.realm.name},${characterData.name}`;
+        // Use raw input with character info and add options
+        const lines = rawInput.split('\n').filter(line => !line.startsWith('Simulation input:'));
+        const characterInfoString = SimcParser.createCharacterInfoString(characterInfo);
+
+        const remainingLines = lines.filter(line => {
+          if (line.startsWith('#') || line.startsWith('//')) return true;
+          if (['level=', 'race=', 'region=', 'server=', 'role=', 'professions=',
+            'spec=', 'talents=', 'covenant=', 'soulbind='].some(s => line.startsWith(s))) {
+            return false;
+          }
+          return true;
+        });
+
+        input = characterInfoString + '\n\n' + remainingLines.join('\n');
         input = addSimulationOptions(input);
       }
 
       console.log("Simulation input:", input);
 
-      // Submit simulation using the new API client
+      // Submit simulation using the API client
       const data = await apiClient.post('/api/simulate/async', {
         simc_input: btoa(input)
       }, {
-        timeout: 10000, // 10 second timeout for submission
+        timeout: 10000,
         retries: 2
       });
 
@@ -639,49 +602,44 @@ function Simc() {
       alert(errorMessage + (error.data?.detail ? `: ${error.data.detail}` : ''));
       setIsSimulating(false);
     }
-  }, [characterData, inputMode, simcInput, characterInfo, formatCombinations, addSimulationOptions]);
+  }, [formatCombinations, addSimulationOptions]);
 
+  // Download report
   const downloadReport = useCallback(() => {
-    if (!simulationResult) return;
+    if (!simulationResult || !characterDisplayData) return;
 
     const blob = new Blob([simulationResult], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${characterData?.name || 'character'}_sim_report.html`;
+    a.download = `${characterDisplayData?.name || 'character'}_sim_report.html`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, [simulationResult, characterData]);
+  }, [simulationResult, characterDisplayData]);
 
+  // Scroll to results
   const scrollToResults = useCallback(() => {
     if (resultsRef.current) {
       resultsRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, []);
 
+  // Handle simulation completion
   const handleSimulationComplete = useCallback((result) => {
     if (result) {
       setSimulationResult(result);
-      // Add small delay to ensure the results are rendered before scrolling
       setTimeout(() => scrollToResults(), 100);
     }
     setCurrentJobId(null);
     setIsSimulating(false);
   }, [scrollToResults]);
 
+  // Handle simulation close
   const handleSimulationClose = useCallback(() => {
     setCurrentJobId(null);
     setIsSimulating(false);
-  }, []);
-
-  const resetState = useCallback(() => {
-    setCharacterData(null);
-    setItemsData(null);
-    setSimcInput('');
-    setCharacterInfo(null);
-    combinationsRef.current = [];
   }, []);
 
   return (
@@ -701,63 +659,32 @@ function Simc() {
         />
       </div>
 
-      <div className="mb-2">
-        <input
-          type="radio"
-          className="btn-check"
-          name="options-outlined"
-          id="addon_radio"
-          value="addon"
-          checked={inputMode === 'addon'}
-          onChange={(e) => {
-            setInputMode(e.target.value);
-            resetState();
-          }}
-        />
-        <label className="btn btn-outline-primary me-2" htmlFor="addon_radio">SimC Addon</label>
+      <AddonInput
+        onDataUpdate={handleDataUpdate}
+        pairedSlots={{ main_hand: 'off_hand', off_hand: 'main_hand', finger1: 'finger2', finger2: 'finger1', trinket1: 'trinket2', trinket2: 'trinket1' }}
+        skippedSlots={['tabard', 'shirt']}
+      />
 
-        <input
-          type="radio"
-          className="btn-check"
-          name="options-outlined"
-          id="armory_radio"
-          value="armory"
-          checked={inputMode === 'armory'}
-          onChange={(e) => {
-            setInputMode(e.target.value);
-            resetState();
-          }}
-        />
-        <label className="btn btn-outline-primary" htmlFor="armory_radio">Armory</label>
-      </div>
-
-      {inputMode === 'addon' ? (
-        <AddonInput
-          onDataUpdate={handleDataUpdate}
-          pairedSlots={simulationDataRef.current.pairedSlots}
-          skippedSlots={['tabard', 'shirt']}
-        />
-      ) : (
-        <ArmoryInput
-          onDataUpdate={handleDataUpdate}
-          pairedSlots={simulationDataRef.current.pairedSlots}
-          skippedSlots={['tabard', 'shirt']}
-          realmIndex={realmIndex}
-          isLoadingRealms={isLoadingRealms}
-        />
+      {parseError && (
+        <div className="alert alert-danger mt-3">
+          <strong>Parse Error:</strong> {parseError}
+        </div>
       )}
 
-      <CharacterDisplay character={characterData} characterInfo={characterInfo} />
+      <CharacterDisplay 
+        character={characterDisplayData} 
+        characterInfo={characterInfoRef.current} 
+      />
 
-      {characterData && (
+      {hasValidData && (
         <EquipmentSection
-          itemsData={itemsData}
+          itemsData={itemsDataRef.current}
           onCombinationsGenerated={handleCombinationsUpdate}
-          characterInfo={characterInfo}
+          characterInfo={characterInfoRef.current}
         />
       )}
 
-      {characterData && (
+      {hasValidData && (
         <CollapsibleSection title="Additional Options">
           <AdditionalOptions
             options={simOptionsRef.current}
@@ -766,13 +693,13 @@ function Simc() {
         </CollapsibleSection>
       )}
 
-      {characterData && (
+      {hasValidData && (
         <CollapsibleSection title="Simulation Setup" defaultOpen={true}>
           <CombinationsDisplay
             combinations={combinationsRef.current}
-            characterData={characterData}
-            itemsData={itemsData}
-            characterInfo={characterInfo}
+            characterData={characterDisplayData}
+            itemsData={itemsDataRef.current}
+            characterInfo={characterInfoRef.current}
             onCombinationsChange={handleCombinationsUpdate}
           />
         </CollapsibleSection>

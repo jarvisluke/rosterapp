@@ -6,9 +6,6 @@ import {
   useState,
   useMemo,
   useCallback,
-  createContext,
-  useContext,
-  useReducer,
   memo
 } from 'react';
 import AddonInput from './AddonInput';
@@ -21,112 +18,30 @@ import SimulationReport from './SimulationReport';
 import CombinationsDisplay from './CombinationsDisplay';
 import AdditionalOptions from './AdditionalOptions';
 import AsyncSimulationDisplay from './AsyncSimulationDisplay';
-
-const pairedSlots = {
-  main_hand: 'off_hand',
-  off_hand: 'main_hand',
-  finger1: 'finger2',
-  finger2: 'finger1',
-  trinket1: 'trinket2',
-  trinket2: 'trinket1'
-};
-
-const skippedSlots = ['tabard', 'shirt'];
-
-const slotDisplayNames = {
-  head: 'Head',
-  neck: 'Neck',
-  shoulder: 'Shoulders',
-  back: 'Back',
-  chest: 'Chest',
-  wrist: 'Wrists',
-  hands: 'Hands',
-  waist: 'Waist',
-  legs: 'Legs',
-  feet: 'Feet',
-  finger1: 'Ring 1',
-  finger2: 'Ring 2',
-  trinket1: 'Trinket 1',
-  trinket2: 'Trinket 2',
-  main_hand: 'Main Hand',
-  off_hand: 'Off Hand'
-};
-
-// Simulation reducer
-const SIMULATION_ACTIONS = {
-  UPDATE_CHARACTER_DATA: 'UPDATE_CHARACTER_DATA',
-  UPDATE_COMBINATIONS: 'UPDATE_COMBINATIONS',
-  UPDATE_SIM_OPTIONS: 'UPDATE_SIM_OPTIONS',
-  UPDATE_SIM_RESULT: 'UPDATE_SIM_RESULT',
-  SET_SIMULATING: 'SET_SIMULATING'
-};
-
-const simulationReducer = (state, action) => {
-  switch (action.type) {
-    case SIMULATION_ACTIONS.UPDATE_CHARACTER_DATA:
-      return { ...state, characterData: action.payload.character, itemsData: action.payload.items, simcInput: action.payload.simcInput };
-    case SIMULATION_ACTIONS.UPDATE_COMBINATIONS:
-      return { ...state, combinations: action.payload };
-    case SIMULATION_ACTIONS.UPDATE_SIM_OPTIONS:
-      return { ...state, simOptions: action.payload };
-    case SIMULATION_ACTIONS.UPDATE_SIM_RESULT:
-      return { ...state, simulationResult: action.payload };
-    case SIMULATION_ACTIONS.SET_SIMULATING:
-      return { ...state, isSimulating: action.payload };
-    default:
-      return state;
-  }
-};
-
-const initialSimulationState = {
-  characterData: null,
-  itemsData: null,
-  simcInput: '',
-  combinations: [],
-  simOptions: {
-    fightDuration: 300,
-    optimalRaidBuffs: true,
-    bloodlust: true,
-    arcaneIntellect: true,
-    battleShout: true,
-    markOfTheWild: true,
-    powerWordFortitude: true,
-    chaosBrand: true,
-    mysticTouch: true,
-    skyfury: true,
-    huntersMark: true,
-    powerInfusion: false
-  },
-  simulationResult: null,
-  isSimulating: false
-};
-
-// Create context
-const SimulationContext = createContext();
-const SimulationDispatchContext = createContext();
-
-// Custom hooks
-function useSimulation() {
-  return useContext(SimulationContext);
-}
-
-function useSimulationDispatch() {
-  return useContext(SimulationDispatchContext);
-}
-
-
-// Memoized components
-const MemoizedCharacterDisplay = memo(({ character }) => {
-  return <CharacterDisplay character={character} />;
-});
-
-const MemoizedAdditionalOptions = memo(({ options, onChange }) => {
-  return <AdditionalOptions options={options} onChange={onChange} />;
-});
+import { ConstraintValidator } from './ClassConstraints';
+import { SimcParser } from './SimcParser';
 
 // Isolated EquipmentSection component
-const EquipmentSection = memo(({ itemsData }) => {
-  const dispatch = useSimulationDispatch();
+const EquipmentSection = memo(({ itemsData, onCombinationsGenerated, characterInfo = null }) => {
+  const skippedSlots = ['tabard', 'shirt'];
+  const slotDisplayNames = {
+    head: 'Head',
+    neck: 'Neck',
+    shoulder: 'Shoulders',
+    back: 'Back',
+    chest: 'Chest',
+    wrist: 'Wrists',
+    hands: 'Hands',
+    waist: 'Waist',
+    legs: 'Legs',
+    feet: 'Feet',
+    finger1: 'Ring 1',
+    finger2: 'Ring 2',
+    trinket1: 'Trinket 1',
+    trinket2: 'Trinket 2',
+    main_hand: 'Main Hand',
+    off_hand: 'Off Hand'
+  };
 
   const preparedItems = useMemo(() => {
     if (!itemsData) return [];
@@ -134,60 +49,80 @@ const EquipmentSection = memo(({ itemsData }) => {
     return Object.entries(itemsData)
       .filter(([slotKey, _]) => !skippedSlots.includes(slotKey))
       .map(([slotKey, data]) => {
+        const items = [data.equipped, ...(data.alternatives || [])].filter(Boolean);
+        
+        // Apply constraints if we have character info
+        let validatedItems = items;
+        if (characterInfo?.class && characterInfo?.spec) {
+          validatedItems = items.map(item => ({
+            ...item,
+            constraints: validateItemConstraints(item, slotKey, characterInfo)
+          }));
+        }
+
         return {
           name: slotDisplayNames[slotKey] || slotKey.charAt(0).toUpperCase() + slotKey.slice(1).replace('_', ' '),
           slotKey: slotKey,
           equipped: data.equipped,
-          alternatives: data.alternatives || []
+          alternatives: data.alternatives || [],
+          validatedItems: validatedItems
         };
       });
-  }, [itemsData]);
-
-  const handleCombinationsGenerated = useCallback((newCombinations) => {
-    dispatch({ type: SIMULATION_ACTIONS.UPDATE_COMBINATIONS, payload: newCombinations });
-  }, [dispatch]);
+  }, [itemsData, characterInfo]);
 
   return (
     <CollapsibleSection title="Character Equipment">
       <ItemSelect
         slots={preparedItems}
-        onCombinationsGenerated={handleCombinationsGenerated}
+        onCombinationsGenerated={onCombinationsGenerated}
+        characterInfo={characterInfo}
       />
     </CollapsibleSection>
   );
 });
 
-// Isolated CombinationsSection component
-const CombinationsSection = memo(({ combinations, characterData, itemsData }) => {
-  return (
-    <CollapsibleSection title="Simulation Setup" defaultOpen={true}>
-      <CombinationsDisplay
-        combinations={combinations}
-        characterData={characterData}
-        itemsData={itemsData}
-      />
-    </CollapsibleSection>
-  );
-});
+// Helper function to validate item constraints
+const validateItemConstraints = (item, slotKey, characterInfo) => {
+  const constraints = {
+    armor: { valid: true, constraint: 'none' },
+    weapon: { valid: true, constraint: 'none' },
+    stat: { valid: true, constraint: 'none' }
+  };
 
-// Isolated SimulationResults component
-const SimulationResults = memo(({ result, downloadReport }) => {
-  return (
-    result && (
-      <CollapsibleSection title="Simulation Results">
-        <SimulationReport htmlContent={result} height="500px" />
-        <div className="d-flex justify-content-end mt-2">
-          <button
-            className="btn btn-secondary"
-            onClick={downloadReport}
-          >
-            Download Report
-          </button>
-        </div>
-      </CollapsibleSection>
-    )
-  );
-});
+  if (!item || !characterInfo?.class || !characterInfo?.spec) {
+    return constraints;
+  }
+
+  // Validate armor type for armor pieces
+  if (item.armorType && ['head', 'shoulder', 'chest', 'wrist', 'hands', 'waist', 'legs', 'feet'].includes(slotKey)) {
+    constraints.armor = ConstraintValidator.isArmorTypeValid(
+      characterInfo.class, 
+      characterInfo.spec, 
+      item.armorType
+    );
+  }
+
+  // Validate weapon type for weapon slots
+  if (item.weaponType && ['main_hand', 'off_hand'].includes(slotKey)) {
+    constraints.weapon = ConstraintValidator.isWeaponTypeValid(
+      characterInfo.class,
+      characterInfo.spec,
+      item.weaponType,
+      slotKey
+    );
+  }
+
+  // Validate primary stat
+  if (item.primaryStat) {
+    constraints.stat = ConstraintValidator.isPrimaryStatValid(
+      characterInfo.class,
+      characterInfo.spec,
+      item.primaryStat
+    );
+  }
+
+  return constraints;
+};
 
 // Simulation button component
 const SimulationButton = memo(({ canSimulate, isSimulating, onRun }) => {
@@ -216,14 +151,174 @@ const SimulationButton = memo(({ canSimulate, isSimulating, onRun }) => {
   );
 });
 
+// Isolated SimulationResults component
+const SimulationResults = memo(({ result, downloadReport }) => {
+  return (
+    result && (
+      <CollapsibleSection title="Simulation Results">
+        <SimulationReport htmlContent={result} height="500px" />
+        <div className="d-flex justify-content-end mt-2">
+          <button
+            className="btn btn-secondary"
+            onClick={downloadReport}
+          >
+            Download Report
+          </button>
+        </div>
+      </CollapsibleSection>
+    )
+  );
+});
+
 function Simc() {
+  // Core state
   const [inputMode, setInputMode] = useState('addon');
-  const [realmIndex, setRealmIndex] = useState(null);
-  const simulationResultRef = useRef(null);
-  const [simulationState, dispatch] = useReducer(simulationReducer, initialSimulationState);
+  const [characterData, setCharacterData] = useState(null);
+  const [itemsData, setItemsData] = useState(null);
+  const [simcInput, setSimcInput] = useState('');
+  const [simulationResult, setSimulationResult] = useState(null);
+  const [isSimulating, setIsSimulating] = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
-  const resultsRef = useRef(null);
+  const [realmIndex, setRealmIndex] = useState(null);
   const [isLoadingRealms, setIsLoadingRealms] = useState(true);
+  const [characterInfo, setCharacterInfo] = useState(null);
+
+  // Refs for data that doesn't affect rendering
+  const combinationsRef = useRef([]);
+  const simOptionsRef = useRef({
+    general: {
+      fightDuration: {
+        value: 300,
+        displayName: 'Fight Duration',
+        min: 60,
+        max: 600,
+        step: 10,
+        unit: 'seconds',
+        type: 'range'
+      },
+      optimalRaidBuffs: {
+        value: true,
+        displayName: 'Use Optimal Raid Buffs',
+        type: 'checkbox'
+      }
+    },
+    buffs: {
+      // Raid buffs
+      bloodlust: {
+        value: true,
+        displayName: 'Bloodlust',
+        category: 'override'
+      },
+      arcaneIntellect: {
+        value: true,
+        displayName: 'Arcane Intellect',
+        category: 'override'
+      },
+      battleShout: {
+        value: true,
+        displayName: 'Battle Shout',
+        category: 'override'
+      },
+      markOfTheWild: {
+        value: true,
+        displayName: 'Mark of the Wild',
+        category: 'override'
+      },
+      powerWordFortitude: {
+        value: true,
+        displayName: 'Power Word: Fortitude',
+        category: 'override'
+      },
+      chaosBrand: {
+        value: true,
+        displayName: 'Chaos Brand',
+        category: 'override'
+      },
+      mysticTouch: {
+        value: true,
+        displayName: 'Mystic Touch',
+        category: 'override'
+      },
+      skyfury: {
+        value: true,
+        displayName: 'Skyfury Totem',
+        category: 'override'
+      },
+      huntersMark: {
+        value: true,
+        displayName: 'Hunter\'s Mark',
+        category: 'override'
+      },
+      // External buffs
+      powerInfusion: {
+        value: false,
+        displayName: 'Power Infusion',
+        category: 'external_buffs'
+      }
+    }
+  });
+
+  const simulationDataRef = useRef({
+    formatItemForSimC: (slotKey, item) => {
+      if (!item) return '';
+
+      let output = `${slotKey}=,id=${item.id}`;
+
+      if (item.enchant_id || item.enchant) {
+        output += `,enchant_id=${item.enchant_id || item.enchant}`;
+      }
+
+      if ((item.gems && item.gems.length > 0) || (item.gem_id && item.gem_id.length > 0)) {
+        const gems = item.gems || item.gem_id || [];
+        if (gems.length > 0 && gems[0]) {
+          output += `,gem_id=${gems.join('/')}`;
+        }
+      }
+
+      if ((item.bonusIds && item.bonusIds.length > 0) || (item.bonus_list && item.bonus_list.length > 0) || (item.bonus_id && item.bonus_id.length > 0)) {
+        const bonusList = item.bonusIds || item.bonus_list || item.bonus_id || [];
+        if (bonusList.length > 0) {
+          output += `,bonus_id=${bonusList.join('/')}`;
+        }
+      }
+
+      if (item.crafted_stats && item.crafted_stats.length > 0) {
+        output += `,crafted_stats=${item.crafted_stats.join('/')}`;
+      }
+
+      return output;
+    },
+    createEquippedCombination: (itemsData) => {
+      if (!itemsData) return null;
+      const skippedSlots = ['tabard', 'shirt'];
+      const equippedGear = {};
+
+      Object.entries(itemsData).forEach(([slotKey, data]) => {
+        if (!skippedSlots.includes(slotKey) && data.equipped) {
+          if (slotKey === 'rings') {
+            if (Array.isArray(data.equipped)) {
+              if (data.equipped[0]) equippedGear['finger1'] = data.equipped[0];
+              if (data.equipped[1]) equippedGear['finger2'] = data.equipped[1];
+            }
+          } else {
+            equippedGear[slotKey] = data.equipped;
+          }
+        }
+      });
+
+      return equippedGear;
+    },
+    pairedSlots: {
+      main_hand: 'off_hand',
+      off_hand: 'main_hand',
+      finger1: 'finger2',
+      finger2: 'finger1',
+      trinket1: 'trinket2',
+      trinket2: 'trinket1'
+    }
+  });
+
+  const resultsRef = useRef(null);
 
   useEffect(() => {
     const fetchRealms = async () => {
@@ -262,170 +357,121 @@ function Simc() {
     fetchRealms();
   }, []);
 
+  // Extract character info when simc input changes
+  useEffect(() => {
+    if (simcInput && inputMode === 'addon') {
+      try {
+        const extractedInfo = SimcParser.extractCharacterInfo(simcInput);
+        const validation = SimcParser.validateCharacterInfo(extractedInfo);
+        
+        if (validation.valid) {
+          setCharacterInfo(extractedInfo);
+        } else {
+          console.warn('Invalid character info:', validation.error);
+          setCharacterInfo(null);
+        }
+      } catch (error) {
+        console.error('Error parsing character info:', error);
+        setCharacterInfo(null);
+      }
+    } else if (inputMode === 'armory' && characterData) {
+      // For armory mode, try to extract info from characterData
+      const extractedInfo = {
+        class: characterData.character_class?.toLowerCase(),
+        spec: characterData.active_spec?.toLowerCase(),
+        name: characterData.name,
+        level: characterData.level,
+        race: characterData.race?.toLowerCase(),
+        region: characterData.region,
+        server: characterData.realm?.name
+      };
+      
+      const validation = SimcParser.validateCharacterInfo(extractedInfo);
+      if (validation.valid) {
+        setCharacterInfo(extractedInfo);
+      }
+    }
+  }, [simcInput, inputMode, characterData]);
+
   const handleDataUpdate = useCallback((data) => {
     if (data) {
-      dispatch({
-        type: SIMULATION_ACTIONS.UPDATE_CHARACTER_DATA,
-        payload: {
-          character: data.character,
-          items: data.items,
-          simcInput: inputMode === 'addon' ? data.rawInput : ''
-        }
-      });
+      setCharacterData(data.character);
+      setItemsData(data.items);
+      if (inputMode === 'addon') {
+        setSimcInput(data.rawInput);
+      }
     } else {
-      dispatch({
-        type: SIMULATION_ACTIONS.UPDATE_CHARACTER_DATA,
-        payload: { character: null, items: null, simcInput: '' }
-      });
+      setCharacterData(null);
+      setItemsData(null);
+      setSimcInput('');
     }
   }, [inputMode]);
 
+  const handleCombinationsUpdate = useCallback((newCombinations) => {
+    combinationsRef.current = newCombinations;
+  }, []);
+
+  const addSimulationOptions = useCallback((inputText) => {
+    const options = simOptionsRef.current;
+    let optionsArr = [];
+
+    // General options
+    optionsArr.push(`max_time=${options.general.fightDuration.value}`);
+
+    // Handle buffs based on optimalRaidBuffs setting
+    if (!options.general.optimalRaidBuffs.value) {
+      optionsArr.push('optimal_raid=0');
+
+      // Add all override buffs (raid buffs)
+      Object.entries(options.buffs).forEach(([id, buff]) => {
+        if (buff.category === 'override') {
+          const simcKey = id.replace(/([A-Z])/g, '_$1').toLowerCase();
+          optionsArr.push(`${buff.category}.${simcKey}=${buff.value ? 1 : 0}`);
+        }
+      });
+    }
+
+    // Add external buffs (always included)
+    Object.entries(options.buffs).forEach(([id, buff]) => {
+      if (buff.category === 'external_buffs') {
+        const simcKey = id.replace(/([A-Z])/g, '_$1').toLowerCase();
+        optionsArr.push(`${buff.category}.${simcKey}=${buff.value ? 1 : 0}`);
+      }
+    });
+
+    return `${inputText}\n\n# Simulation Options\n${optionsArr.join('\n')}`;
+  }, []);
+
   const handleOptionsChange = useCallback((newOptions) => {
-    dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_OPTIONS, payload: newOptions });
+    simOptionsRef.current = newOptions;
   }, []);
 
-  const canSimulate = useMemo(() => {
-    return simulationState.characterData && (
-      (inputMode === 'addon' && simulationState.simcInput) ||
-      (inputMode === 'armory' && simulationState.characterData.name && simulationState.characterData.realm.name)
-    );
-  }, [simulationState.characterData, inputMode, simulationState.simcInput]);
-
-  // All formatting functions remain the same but are now memoized
-  const formatItemForSimC = useCallback((slotKey, item) => {
-    if (!item) return '';
-
-    let output = `${slotKey}=,id=${item.id}`;
-
-    if (item.enchant_id || item.enchant) {
-      output += `,enchant_id=${item.enchant_id || item.enchant}`;
-    }
-
-    if ((item.gems && item.gems.length > 0) || (item.gem_id && item.gem_id.length > 0)) {
-      const gems = item.gems || item.gem_id || [];
-      if (gems.length > 0 && gems[0]) {
-        output += `,gem_id=${gems.join('/')}`;
-      }
-    }
-
-    if ((item.bonusIds && item.bonusIds.length > 0) || (item.bonus_list && item.bonus_list.length > 0) || (item.bonus_id && item.bonus_id.length > 0)) {
-      const bonusList = item.bonusIds || item.bonus_list || item.bonus_id || [];
-      if (bonusList.length > 0) {
-        output += `,bonus_id=${bonusList.join('/')}`;
-      }
-    }
-
-    if (item.crafted_stats && item.crafted_stats.length > 0) {
-      output += `,crafted_stats=${item.crafted_stats.join('/')}`;
-    }
-
-    return output;
-  }, []);
-
-  const extractCharacterInfo = useCallback((simcInput) => {
-    const charInfo = [];
-    const lines = simcInput.split('\n');
-
-    let detectedClass = '';
-    for (const line of lines) {
-      if (line.startsWith('spec=')) {
-        const spec = line.substring(5).toLowerCase();
-        const specClassMap = {
-          subtlety: 'rogue',
-          assassination: 'rogue',
-          outlaw: 'rogue',
-        };
-        detectedClass = specClassMap[spec] || '';
-        break;
-      }
-    }
-
-    let characterName = 'Character';
-    const commentLine = lines.find(line => line.startsWith('#'));
-    if (commentLine) {
-      const match = commentLine.match(/^#\s*([^\s-]+)/);
-      if (match && match[1]) {
-        characterName = match[1];
-      }
-    }
-
-    if (detectedClass) {
-      charInfo.push(`${detectedClass}="${characterName}"`);
-    } else {
-      charInfo.push(`rogue="${characterName}"`);
-    }
-
-    const settingsToExtract = [
-      'level=', 'race=', 'region=', 'server=', 'role=', 'professions=',
-      'spec=', 'talents=', 'covenant=', 'soulbind='
-    ];
-
-    lines.forEach(line => {
-      if (!line.startsWith('#') && !line.startsWith('//')) {
-        for (const setting of settingsToExtract) {
-          if (line.startsWith(setting)) {
-            charInfo.push(line.trim());
-            break;
-          }
-        }
-      }
-    });
-
-    return charInfo.join('\n');
-  }, []);
-
-  const createEquippedCombination = useCallback((itemsData) => {
-    if (!itemsData) return null;
-
-    const equippedGear = {};
-
-    Object.entries(itemsData).forEach(([slotKey, data]) => {
-      if (!skippedSlots.includes(slotKey) && data.equipped) {
-        if (slotKey === 'rings') {
-          if (Array.isArray(data.equipped)) {
-            if (data.equipped[0]) equippedGear['finger1'] = data.equipped[0];
-            if (data.equipped[1]) equippedGear['finger2'] = data.equipped[1];
-          }
-        } else {
-          equippedGear[slotKey] = data.equipped;
-        }
-      }
-    });
-
-    return equippedGear;
-  }, []);
-
-  const addSimulationOptions = useCallback((inputText, simOptions) => {
-    let options = [];
-
-    options.push(`max_time=${simOptions.fightDuration}`);
-
-    if (!simOptions.optimalRaidBuffs) {
-      options.push('optimal_raid=0');
-
-      options.push(`override.bloodlust=${simOptions.bloodlust ? 1 : 0}`);
-      options.push(`override.arcane_intellect=${simOptions.arcaneIntellect ? 1 : 0}`);
-      options.push(`override.battle_shout=${simOptions.battleShout ? 1 : 0}`);
-      options.push(`override.mark_of_the_wild=${simOptions.markOfTheWild ? 1 : 0}`);
-      options.push(`override.power_word_fortitude=${simOptions.powerWordFortitude ? 1 : 0}`);
-      options.push(`override.chaos_brand=${simOptions.chaosBrand ? 1 : 0}`);
-      options.push(`override.mystic_touch=${simOptions.mysticTouch ? 1 : 0}`);
-      options.push(`override.skyfury=${simOptions.skyfury ? 1 : 0}`);
-      options.push(`override.hunters_mark=${simOptions.huntersMark ? 1 : 0}`);
-    }
-
-    options.push(`external_buffs.power_infusion=${simOptions.powerInfusion ? 1 : 0}`);
-
-    return `${inputText}\n\n# Simulation Options\n${options.join('\n')}`;
-  }, []);
-
-  const formatCombinations = useCallback((combinations, simcInput, itemsData) => {
+  const formatCombinations = useCallback(() => {
+    const combinations = combinationsRef.current;
     if (!combinations.length) return '';
 
-    let combinationsText = '';
-    const characterInfo = extractCharacterInfo(simcInput);
+    const { createEquippedCombination, formatItemForSimC } = simulationDataRef.current;
 
-    combinationsText += `${characterInfo}\n\n`;
+    let combinationsText = '';
+    
+    // Use SimcParser to extract character info
+    const characterInfoString = characterInfo ? 
+      SimcParser.createCharacterInfoString(characterInfo) :
+      SimcParser.extractCharacterInfo(simcInput);
+
+    combinationsText += `${characterInfoString}\n\n`;
+
+    // Extract talents and other settings from original input
+    const lines = simcInput.split('\n');
+    const additionalSettings = lines.filter(line => {
+      if (line.startsWith('#') || line.startsWith('//')) return true;
+      if (line.startsWith('talents=') || line.startsWith('professions=')) return true;
+      return false;
+    });
+
+    if (additionalSettings.length > 0) {
+      combinationsText += additionalSettings.join('\n') + '\n\n';
+    }
 
     const equippedGear = createEquippedCombination(itemsData);
     if (equippedGear) {
@@ -439,6 +485,32 @@ function Simc() {
 
         if (itemInfo) {
           combinationsText += `# ${itemInfo}\n`;
+        }
+
+        // Validate item constraints and add warnings
+        if (characterInfo) {
+          const constraints = validateItemConstraints(item, slotKey, characterInfo);
+          const warnings = [];
+          
+          if (!constraints.armor.valid) {
+            warnings.push('Invalid armor type');
+          } else if (constraints.armor.constraint === 'soft') {
+            warnings.push('Suboptimal armor type');
+          }
+          
+          if (!constraints.weapon.valid) {
+            warnings.push('Invalid weapon type');
+          } else if (constraints.weapon.constraint === 'soft') {
+            warnings.push('Suboptimal weapon type');
+          }
+          
+          if (constraints.stat.constraint === 'soft') {
+            warnings.push('Suboptimal primary stat');
+          }
+          
+          if (warnings.length > 0) {
+            combinationsText += `# Warning: ${warnings.join(', ')}\n`;
+          }
         }
 
         combinationsText += `${formatItemForSimC(slotKey, item)}\n`;
@@ -461,29 +533,64 @@ function Simc() {
           combinationsText += `# ${itemInfo}\n`;
         }
 
+        // Validate item constraints for combinations too
+        if (characterInfo) {
+          const constraints = validateItemConstraints(item, slotKey, characterInfo);
+          const warnings = [];
+          
+          if (!constraints.armor.valid) {
+            warnings.push('Invalid armor type');
+          } else if (constraints.armor.constraint === 'soft') {
+            warnings.push('Suboptimal armor type');
+          }
+          
+          if (!constraints.weapon.valid) {
+            warnings.push('Invalid weapon type');
+          } else if (constraints.weapon.constraint === 'soft') {
+            warnings.push('Suboptimal weapon type');
+          }
+          
+          if (constraints.stat.constraint === 'soft') {
+            warnings.push('Suboptimal primary stat');
+          }
+          
+          if (warnings.length > 0) {
+            combinationsText += `# Warning: ${warnings.join(', ')}\n`;
+          }
+        }
+
         combinationsText += `${formatItemForSimC(slotKey, item)}\n`;
       });
 
       combinationsText += '\n';
     });
 
-    return addSimulationOptions(combinationsText, simulationState.simOptions);
-  }, [extractCharacterInfo, createEquippedCombination, formatItemForSimC, addSimulationOptions, simulationState.simOptions]);
+    return addSimulationOptions(combinationsText);
+  }, [simcInput, itemsData, characterInfo, addSimulationOptions]);
+
+  const canSimulate = useMemo(() => {
+    return characterData && (
+      (inputMode === 'addon' && simcInput) ||
+      (inputMode === 'armory' && characterData.name && characterData.realm?.name)
+    );
+  }, [characterData, inputMode, simcInput]);
 
   const runSimulation = useCallback(async () => {
-    if (!simulationState.characterData) return;
+    if (!characterData) return;
 
-    dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: true });
+    setIsSimulating(true);
 
     try {
       let input;
 
       if (inputMode === 'addon') {
-        if (simulationState.combinations.length > 0) {
-          input = formatCombinations(simulationState.combinations, simulationState.simcInput, simulationState.itemsData);
+        if (combinationsRef.current.length > 0) {
+          input = formatCombinations();
         } else {
-          const lines = simulationState.simcInput.split('\n').filter(line => !line.startsWith('Simulation input:'));
-          const characterInfo = extractCharacterInfo(simulationState.simcInput);
+          const lines = simcInput.split('\n').filter(line => !line.startsWith('Simulation input:'));
+          const characterInfoString = characterInfo ? 
+            SimcParser.createCharacterInfoString(characterInfo) :
+            SimcParser.extractCharacterInfo(simcInput);
 
           const remainingLines = lines.filter(line => {
             if (line.startsWith('#') || line.startsWith('//')) return true;
@@ -494,12 +601,12 @@ function Simc() {
             return true;
           });
 
-          input = characterInfo + '\n\n' + remainingLines.join('\n');
-          input = addSimulationOptions(input, simulationState.simOptions);
+          input = characterInfoString + '\n\n' + remainingLines.join('\n');
+          input = addSimulationOptions(input);
         }
       } else {
-        input = `armory=${simulationState.characterData.region},${simulationState.characterData.realm.name},${simulationState.characterData.name}`;
-        input = addSimulationOptions(input, simulationState.simOptions);
+        input = `armory=${characterData.region},${characterData.realm.name},${characterData.name}`;
+        input = addSimulationOptions(input);
       }
 
       console.log("Simulation input:", input);
@@ -532,43 +639,23 @@ function Simc() {
       }
 
       alert(errorMessage + (error.data?.detail ? `: ${error.data.detail}` : ''));
-      dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
+      setIsSimulating(false);
     }
-  }, [simulationState, inputMode, formatCombinations, extractCharacterInfo, addSimulationOptions]);
+  }, [characterData, inputMode, simcInput, characterInfo, formatCombinations, addSimulationOptions]);
 
-  // Also update the realm fetching in useEffect:
-  useEffect(() => {
-    const fetchRealms = async () => {
-      try {
-        const data = await apiClient.get('/api/realms', {
-          cache: true,
-          cacheTTL: 1000 * 60 * 60 * 24 // Cache for 24 hours
-        });
-        setRealmIndex(data);
-      } catch (error) {
-        console.error('Error fetching realms:', error);
-        if (error instanceof ApiError && !error.isNetworkError) {
-          // Only show error if it's not a network issue
-          alert('Failed to load realm data. Some features may not work properly.');
-        }
-      }
-    };
-
-    fetchRealms();
-  }, []);
   const downloadReport = useCallback(() => {
-    if (!simulationState.simulationResult) return;
+    if (!simulationResult) return;
 
-    const blob = new Blob([simulationState.simulationResult], { type: 'text/html' });
+    const blob = new Blob([simulationResult], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${simulationState.characterData?.name || 'character'}_sim_report.html`;
+    a.download = `${characterData?.name || 'character'}_sim_report.html`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, [simulationState.simulationResult, simulationState.characterData]);
+  }, [simulationResult, characterData]);
 
   const scrollToResults = useCallback(() => {
     if (resultsRef.current) {
@@ -578,488 +665,1013 @@ function Simc() {
 
   const handleSimulationComplete = useCallback((result) => {
     if (result) {
-      dispatch({ type: SIMULATION_ACTIONS.UPDATE_SIM_RESULT, payload: result });
+      setSimulationResult(result);
       // Add small delay to ensure the results are rendered before scrolling
       setTimeout(() => scrollToResults(), 100);
     }
     setCurrentJobId(null);
-    dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
+    setIsSimulating(false);
   }, [scrollToResults]);
 
   const handleSimulationClose = useCallback(() => {
     setCurrentJobId(null);
-    dispatch({ type: SIMULATION_ACTIONS.SET_SIMULATING, payload: false });
+    setIsSimulating(false);
+  }, []);
+
+  const resetState = useCallback(() => {
+    setCharacterData(null);
+    setItemsData(null);
+    setSimcInput('');
+    setCharacterInfo(null);
+    combinationsRef.current = [];
   }, []);
 
   return (
-    <SimulationContext.Provider value={simulationState}>
-      <SimulationDispatchContext.Provider value={dispatch}>
-        <div className="container mt-3 pb-5 mb-5">
-          {currentJobId && (
-            <AsyncSimulationDisplay
-              jobId={currentJobId}
-              onClose={handleSimulationClose}
-              onComplete={handleSimulationComplete}
-            />
-          )}
+    <div className="container mt-3 pb-5 mb-5">
+      {currentJobId && (
+        <AsyncSimulationDisplay
+          jobId={currentJobId}
+          onClose={handleSimulationClose}
+          onComplete={handleSimulationComplete}
+        />
+      )}
 
-          <div ref={resultsRef}>
-            <SimulationResults
-              result={simulationState.simulationResult}
-              downloadReport={downloadReport}
-            />
-          </div>
+      <div ref={resultsRef}>
+        <SimulationResults
+          result={simulationResult}
+          downloadReport={downloadReport}
+        />
+      </div>
 
-          <div className="mb-2">
-            <input
-              type="radio"
-              className="btn-check"
-              name="options-outlined"
-              id="addon_radio"
-              value="addon"
-              checked={inputMode === 'addon'}
-              onChange={(e) => {
-                setInputMode(e.target.value);
-                dispatch({
-                  type: SIMULATION_ACTIONS.UPDATE_CHARACTER_DATA,
-                  payload: { character: null, items: null, simcInput: '' }
-                });
-              }}
-            />
-            <label className="btn btn-outline-primary me-2" htmlFor="addon_radio">SimC Addon</label>
+      <div className="mb-2">
+        <input
+          type="radio"
+          className="btn-check"
+          name="options-outlined"
+          id="addon_radio"
+          value="addon"
+          checked={inputMode === 'addon'}
+          onChange={(e) => {
+            setInputMode(e.target.value);
+            resetState();
+          }}
+        />
+        <label className="btn btn-outline-primary me-2" htmlFor="addon_radio">SimC Addon</label>
 
-            <input
-              type="radio"
-              className="btn-check"
-              name="options-outlined"
-              id="armory_radio"
-              value="armory"
-              checked={inputMode === 'armory'}
-              onChange={(e) => {
-                setInputMode(e.target.value);
-                dispatch({
-                  type: SIMULATION_ACTIONS.UPDATE_CHARACTER_DATA,
-                  payload: { character: null, items: null, simcInput: '' }
-                });
-              }}
-            />
-            <label className="btn btn-outline-primary" htmlFor="armory_radio">Armory</label>
-          </div>
+        <input
+          type="radio"
+          className="btn-check"
+          name="options-outlined"
+          id="armory_radio"
+          value="armory"
+          checked={inputMode === 'armory'}
+          onChange={(e) => {
+            setInputMode(e.target.value);
+            resetState();
+          }}
+        />
+        <label className="btn btn-outline-primary" htmlFor="armory_radio">Armory</label>
+      </div>
 
-          {inputMode === 'addon' ? (
-            <AddonInput
-              onDataUpdate={handleDataUpdate}
-              pairedSlots={pairedSlots}
-              skippedSlots={skippedSlots}
-            />
-          ) : (
-            <ArmoryInput
-              onDataUpdate={handleDataUpdate}
-              pairedSlots={pairedSlots}
-              skippedSlots={skippedSlots}
-              realmIndex={realmIndex}
-              isLoadingRealms={isLoadingRealms}
-            />
-          )}
+      {inputMode === 'addon' ? (
+        <AddonInput
+          onDataUpdate={handleDataUpdate}
+          pairedSlots={simulationDataRef.current.pairedSlots}
+          skippedSlots={['tabard', 'shirt']}
+        />
+      ) : (
+        <ArmoryInput
+          onDataUpdate={handleDataUpdate}
+          pairedSlots={simulationDataRef.current.pairedSlots}
+          skippedSlots={['tabard', 'shirt']}
+          realmIndex={realmIndex}
+          isLoadingRealms={isLoadingRealms}
+        />
+      )}
 
-          <MemoizedCharacterDisplay character={simulationState.characterData} />
+      <CharacterDisplay character={characterData} characterInfo={characterInfo} />
 
-          {simulationState.characterData && (
-            <EquipmentSection itemsData={simulationState.itemsData} />
-          )}
+      {characterData && (
+        <EquipmentSection
+          itemsData={itemsData}
+          onCombinationsGenerated={handleCombinationsUpdate}
+          characterInfo={characterInfo}
+        />
+      )}
 
-          {simulationState.characterData && (
-            <CollapsibleSection title="Additional Options">
-              <MemoizedAdditionalOptions
-                options={simulationState.simOptions}
-                onChange={handleOptionsChange}
-              />
-            </CollapsibleSection>
-          )}
-
-          {simulationState.characterData && (
-            <CombinationsSection
-              combinations={simulationState.combinations}
-              characterData={simulationState.characterData}
-              itemsData={simulationState.itemsData}
-            />
-          )}
-
-          <SimulationButton
-            canSimulate={canSimulate}
-            isSimulating={simulationState.isSimulating}
-            onRun={runSimulation}
+      {characterData && (
+        <CollapsibleSection title="Additional Options">
+          <AdditionalOptions
+            options={simOptionsRef.current}
+            onChange={handleOptionsChange}
           />
-        </div>
-      </SimulationDispatchContext.Provider>
-    </SimulationContext.Provider>
+        </CollapsibleSection>
+      )}
+
+      {characterData && (
+        <CollapsibleSection title="Simulation Setup" defaultOpen={true}>
+          <CombinationsDisplay
+            combinations={combinationsRef.current}
+            characterData={characterData}
+            itemsData={itemsData}
+            characterInfo={characterInfo}
+            onCombinationsChange={handleCombinationsUpdate}
+          />
+        </CollapsibleSection>
+      )}
+
+      <SimulationButton
+        canSimulate={canSimulate}
+        isSimulating={isSimulating}
+        onRun={runSimulation}
+      />
+    </div>
   );
 }
 
 export default Simc;
 ```
 
-`AsyncSimulationDisplay.jsx`
+`AddonInput.jsx`
 ```jsx
-import { useState, useEffect, useCallback } from 'react';
-import { apiClient, ApiError } from '../../util/api';
-import SimulationReport from './SimulationReport';
+import { useState, useEffect } from 'react';
 
-function AsyncSimulationDisplay({ jobId, onClose, onComplete }) {
-  const [status, setStatus] = useState(null);
-  const [queuePosition, setQueuePosition] = useState(null);
-  const [estimatedWait, setEstimatedWait] = useState(null);
+const AddonInput = ({ onDataUpdate, pairedSlots, skippedSlots }) => {
+  const [simcInput, setSimcInput] = useState('');
   const [error, setError] = useState(null);
-  const [result, setResult] = useState(null);
 
-  const checkStatus = useCallback(async () => {
-    try {
-      const data = await apiClient.get(`/api/simulate/status/${jobId}`, {
-        timeout: 10000,
-        retries: 3,
-        retryDelay: 1000
-      });
-      
-      setStatus(data.status);
-      setQueuePosition(data.queue_position);
-      setEstimatedWait(data.estimated_wait);
+  const handleInputChange = (e) => {
+    const newValue = e.target.value;
+    setSimcInput(newValue);
+    setError(null);
 
-      if (data.status === 'COMPLETED') {
-        try {
-          const resultContent = await apiClient.get(`/api/simulate/result/${jobId}`, {
-            timeout: 30000,
-            retries: 2
-          });
-          setResult(resultContent);
-          onComplete(resultContent);
-        } catch (resultError) {
-          console.error('Error fetching result:', resultError);
-          setError('Failed to load simulation result');
-        }
-      } else if (data.status === 'FAILED') {
-        setError(data.error || 'Simulation failed');
+    if (newValue.trim()) {
+      try {
+        const parsedData = parseSimC(newValue);
+        onDataUpdate({
+          ...parsedData,
+          rawInput: newValue  // Pass the raw input along with parsed data
+        });
+      } catch (err) {
+        setError(err.message);
+        onDataUpdate(null);
       }
-    } catch (err) {
-      console.error('Error checking status:', err);
-      
-      if (err instanceof ApiError) {
-        if (err.isNetworkError) {
-          setError('Connection lost. Retrying...');
-        } else if (err.status === 404) {
-          setError('Simulation job not found');
-        } else {
-          setError(`Failed to check status: ${err.message}`);
-        }
-      } else {
-        setError('Unknown error occurred');
-      }
-    }
-  }, [jobId, onComplete]);
-
-  useEffect(() => {
-    let intervalId;
-    
-    if (status !== 'COMPLETED' && status !== 'FAILED' && !error) {
-      checkStatus();
-      intervalId = setInterval(checkStatus, 5000);
-    }
-
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId);
-      }
-    };
-  }, [status, error, checkStatus]);
-
-  const formatWaitTime = (seconds) => {
-    if (seconds < 60) {
-      return `${seconds} seconds`;
-    } else if (seconds < 3600) {
-      const minutes = Math.floor(seconds / 60);
-      return `${minutes} minute${minutes !== 1 ? 's' : ''}`;
     } else {
-      const hours = Math.floor(seconds / 3600);
-      const minutes = Math.floor((seconds % 3600) / 60);
-      return `${hours} hour${hours !== 1 ? 's' : ''} ${minutes} minute${minutes !== 1 ? 's' : ''}`;
+      onDataUpdate(null);
     }
   };
 
-  if (error) {
-    return (
-      <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
-        <div className="modal-dialog modal-dialog-centered">
-          <div className="modal-content">
-            <div className="modal-header bg-danger text-white">
-              <h5 className="modal-title">Simulation Error</h5>
-              <button type="button" className="btn-close" onClick={onClose}></button>
-            </div>
-            <div className="modal-body">
-              <p className="text-danger">{error}</p>
-            </div>
-            <div className="modal-footer">
-              <button type="button" className="btn btn-secondary" onClick={onClose}>
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Adler-32 checksum implementation matching the Lua version
+  const adler32 = (data) => {
+    const MOD_ADLER = 65521; // largest prime smaller than 2^16
+    let s1 = 1;
+    let s2 = 0;
 
-  if (status === 'COMPLETED' && result) {
-    return (
-      <SimulationReport 
-        htmlContent={result}
-        onClose={onClose}
-        jobId={jobId}
-      />
-    );
-  }
+    // Process each character
+    for (let i = 0; i < data.length; i++) {
+      s1 = (s1 + data.charCodeAt(i)) % MOD_ADLER;
+      s2 = (s2 + s1) % MOD_ADLER;
+    }
+
+    // Combine s1 and s2 using bitwise operations
+    return ((s2 << 16) | s1) >>> 0;
+  };
+
+  const parseSimC = (input) => {
+    try {
+      // Find the index of the checksum line
+      const checksumLineIndex = input.lastIndexOf('# Checksum:');
+      if (checksumLineIndex === -1) {
+        throw new Error('No checksum found in SimC input');
+      }
+
+      // Extract the provided checksum
+      const checksumMatch = input.substring(checksumLineIndex).match(/# Checksum: ([a-fA-F0-9]+)/);
+      if (!checksumMatch) {
+        throw new Error('Malformed checksum in SimC input');
+      }
+
+      // Get only the data before the checksum line for calculation
+      const inputForChecksum = input.substring(0, checksumLineIndex);
+
+      // Get the first line for character info
+      const lines = input.split('\n');
+      const firstLine = lines[0] || '';
+
+      // Parse character name and realm from the first line
+      let characterName = 'Unknown';
+      let displayRealm = 'Unknown';
+      let spec = '';
+
+      // First line pattern: # Character_Name - Spec_Name - Date - Region/Realm
+      const firstLineMatch = firstLine.match(/# ([^-]+) - ([^-]+) - [^-]+ - [^\/]+\/([^"]+)/);
+
+      if (firstLineMatch) {
+        characterName = firstLineMatch[1].trim();
+        spec = firstLineMatch[2].trim();
+        displayRealm = firstLineMatch[3].trim();
+      } else {
+        // Fallback to finding realm only if full pattern doesn't match
+        const realmMatch = firstLine.match(/\/([^\/\n]+)$/);
+        if (realmMatch) {
+          displayRealm = realmMatch[1].trim();
+        }
+      }
+
+      // Calculate checksum
+      const calculatedChecksum = adler32(inputForChecksum);
+      const providedChecksum = parseInt(checksumMatch[1], 16);
+
+      if (calculatedChecksum !== providedChecksum) {
+        throw new Error('Invalid SimC input: checksum mismatch');
+      }
+
+      // Use parsed name from first line, or fall back to the rogue="..." pattern
+      const name = characterName !== 'Unknown' ? characterName : (input.match(/rogue="([^"]+)"/)?.[1] || 'Unknown');
+
+      // If we parsed spec from first line, use it, otherwise look for spec= pattern
+      let parsedSpec = spec || input.match(/spec=([a-z]+)/)?.[1];
+      if (!parsedSpec) parsedSpec = 'subtlety'; // Default to Subtlety if no spec found
+
+      // Parse other character info
+      const level = input.match(/level=(\d+)/)?.[1];
+      const race = input.match(/race=([a-z]+)/)?.[1];
+      const region = input.match(/region=([a-z]+)/)?.[1];
+      const server = input.match(/server=([a-z]+)/)?.[1];
+      let specId = '261'; // Default to Subtlety
+
+      if (parsedSpec) {
+        switch (parsedSpec.toLowerCase()) {
+          case 'assassination': specId = '259'; break;
+          case 'outlaw': specId = '260'; break;
+          case 'subtlety': specId = '261'; break;
+        }
+      }
+
+      // Extract item information with names
+      const items = {};
+      let currentItemName = '';
+      let isGearFromBags = false;
+
+      // Special handling for rings - combine into a single 'rings' slot
+      const ringItems = {
+        equipped: [],
+        alternatives: []
+      };
+
+      for (const line of lines) {
+        if (line.startsWith('### Gear from Bags')) {
+          isGearFromBags = true;
+          continue;
+        }
+
+        if (line.startsWith('### Additional Character Info')) {
+          isGearFromBags = false;
+          continue;
+        }
+
+        if (line.startsWith('# ') && line.match(/\(\d+\)$/)) {
+          // Extract item name and item level from comment line
+          const itemLevelMatch = line.match(/\((\d+)\)$/);
+          currentItemName = line.substring(2, line.lastIndexOf(' ('));
+          const itemLevel = itemLevelMatch ? itemLevelMatch[1] : null;
+
+          // Extract item information
+          const nextLine = lines[lines.indexOf(line) + 1];
+          if (nextLine && nextLine.match(/^#?\s*[\w_]+=,id=/)) {
+            const itemMatch = nextLine.match(/^#?\s*([\w_]+)=,id=(\d+)(?:,enchant_id=(\d+))?(?:,gem_id=([^,]+))?(?:,bonus_id=([^,]+))?/);
+            if (itemMatch) {
+              const [_, slot, itemId, enchantId, gemIds, bonusIds] = itemMatch;
+
+              // Skip specified slots (e.g. tabard)
+              if (skippedSlots.includes(slot)) continue;
+
+              const itemData = {
+                id: itemId,
+                name: currentItemName,
+                enchant: enchantId || null,
+                gems: gemIds ? gemIds.split('/') : [],
+                bonusIds: bonusIds ? bonusIds.split('/') : [],
+                itemLevel: itemLevel
+              };
+
+              // Handle ring slots separately
+              if (slot === 'finger1' || slot === 'finger2') {
+                if (!isGearFromBags) {
+                  // Add to equipped rings if not already there
+                  if (!ringItems.equipped.some(ring => ring.id === itemId)) {
+                    ringItems.equipped.push(itemData);
+                  }
+                } else {
+                  // Add to alternatives if not already there and not equipped
+                  const isEquipped = ringItems.equipped.some(ring => ring.id === itemId);
+                  const isAlreadyAlternative = ringItems.alternatives.some(ring => ring.id === itemId);
+                  
+                  if (!isEquipped && !isAlreadyAlternative) {
+                    ringItems.alternatives.push(itemData);
+                  }
+                }
+              } else {
+                // Handle normal slots
+                if (!items[slot]) {
+                  items[slot] = {
+                    equipped: null,
+                    alternatives: []
+                  };
+                }
+
+                if (isGearFromBags) {
+                  // Add to alternatives but avoid duplicates
+                  const isDuplicate = items[slot].alternatives.some(item => item.id === itemId) ||
+                    (items[slot].equipped && items[slot].equipped.id === itemId);
+
+                  if (!isDuplicate) {
+                    items[slot].alternatives.push(itemData);
+                  }
+                } else {
+                  items[slot].equipped = itemData;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Add the combined rings to the items object
+      items.rings = ringItems;
+
+      return {
+        character: {
+          name,
+          level,
+          race: { name: race },
+          realm: { name: server, displayName: displayRealm },
+          region,
+          character_class: { name: 'Rogue' },
+          spec: parsedSpec,
+          specId
+        },
+        items
+      };
+    } catch (err) {
+      throw err;
+    }
+  };
 
   return (
-    <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
-      <div className="modal-dialog modal-dialog-centered">
-        <div className="modal-content">
-          <div className="modal-header">
-            <h5 className="modal-title">Simulation in Progress</h5>
-            <button type="button" className="btn-close" onClick={onClose}></button>
-          </div>
-          <div className="modal-body text-center">
-            <div className="mb-3">
-              <div className="spinner-border text-primary" role="status">
-                <span className="visually-hidden">Loading...</span>
-              </div>
-            </div>
-            <h6>Status: {status}</h6>
-            {queuePosition > 0 && (
-              <p>Queue Position: {queuePosition}</p>
-            )}
-            {estimatedWait && (
-              <p>Estimated Wait: {formatWaitTime(estimatedWait)}</p>
-            )}
-            <small className="text-muted">
-              Job ID: {jobId}
-            </small>
-          </div>
-          <div className="modal-footer">
-            <button type="button" className="btn btn-secondary" onClick={onClose}>
-              Cancel
-            </button>
-          </div>
-        </div>
+    <>
+      <textarea
+        className={`form-control bg-body-secondary font-monospace ${error ? 'is-invalid' : ''}`}
+        placeholder="Paste the output from the /simc command here..."
+        style={{ height: '200px' }}
+        value={simcInput}
+        onChange={handleInputChange}
+      />
+      <div className="invalid-feedback">
+        {error}
       </div>
-    </div>
+    </>
   );
-}
+};
 
-export default AsyncSimulationDisplay;
+export default AddonInput;
 ```
 
-`AdditionalOptions.jsx`
+`CharacterDisplay.jsx`
 ```jsx
-import React from 'react';
+const CharacterDisplay = ({ character }) => {
+    return character ? (
+        <div className="card mt-3 mb-3">
+            <div className="card-body">
+                <h5 className="card-title">
+                    {character.name}
+                    {character.realm?.displayName &&
+                        <span className="text-muted">-{character.realm.displayName}</span>}
+                </h5>
+                <p className="card-text">
+                    Level {character.level}{' '}
+                    {character.race.name.charAt(0).toUpperCase() +
+                        character.race.name.slice(1)}{' '}
+                    {character.character_class.name}
+                    {character.spec && ` (${character.spec.charAt(0).toUpperCase() +
+                        character.spec.slice(1)
+                        })`}
+                </p>
+            </div>
+        </div>
+    ) : null;
+};
 
-const AdditionalOptions = ({ options, onChange }) => {
-  const handleOptionChange = (key, value) => {
-    onChange({ ...options, [key]: value });
+export default CharacterDisplay
+```
+
+`ItemSelect.jsx`
+```jsx
+import { useEffect, useState, useRef } from 'react';
+import ItemSlot from './ItemSlot';
+import Item from './Item';
+
+const ItemSelect = ({ slots, onCombinationsGenerated }) => {
+  const [selectedItems, setSelectedItems] = useState({});
+  const [lastLoggedCombinations, setLastLoggedCombinations] = useState(null);
+  const combinationCallbackRef = useRef(onCombinationsGenerated);
+
+  // Shared slot types - items can be equipped in any of these slots
+  const sharedTypes = {
+    trinket: ['trinket1', 'trinket2'],
+    weapon: ['main_hand', 'off_hand']
   };
 
-  return (
-    <div className="additional-options">
-      <div className="mb-3">
-        <label htmlFor="fightDuration" className="form-label">
-          Fight Duration: {options.fightDuration} seconds
-        </label>
-        <input
-          type="range"
-          className="form-range"
-          id="fightDuration"
-          min="60"
-          max="600"
-          step="10"
-          value={options.fightDuration}
-          onChange={(e) => handleOptionChange('fightDuration', parseInt(e.target.value))}
-        />
-      </div>
+  // Keep callback reference fresh
+  useEffect(() => {
+    combinationCallbackRef.current = onCombinationsGenerated;
+  }, [onCombinationsGenerated]);
 
-      <div className="mb-3 form-check">
-        <input
-          type="checkbox"
-          className="form-check-input"
-          id="optimalRaidBuffs"
-          checked={options.optimalRaidBuffs}
-          onChange={(e) => handleOptionChange('optimalRaidBuffs', e.target.checked)}
-        />
-        <label className="form-check-label" htmlFor="optimalRaidBuffs">
-          Use Optimal Raid Buffs
-        </label>
-      </div>
+  // Get all items for a specific type (trinkets or weapons)
+  const getItemsForType = (type, currentSlotKey) => {
+    if (!slots) return [];
+    const sharedSlotKeys = sharedTypes[type];
+    if (!sharedSlotKeys) return [];
 
-      {!options.optimalRaidBuffs && (
-        <div className="raid-buffs-container ms-4 mb-3">
-          <div className="row">
-            <div className="col-md-6">
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="bloodlust"
-                  checked={options.bloodlust}
-                  onChange={(e) => handleOptionChange('bloodlust', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="bloodlust">
-                  Bloodlust / Heroism
-                </label>
-              </div>
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="arcaneIntellect"
-                  checked={options.arcaneIntellect}
-                  onChange={(e) => handleOptionChange('arcaneIntellect', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="arcaneIntellect">
-                  Arcane Intellect
-                </label>
-              </div>
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="battleShout"
-                  checked={options.battleShout}
-                  onChange={(e) => handleOptionChange('battleShout', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="battleShout">
-                  Battle Shout
-                </label>
-              </div>
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="markOfTheWild"
-                  checked={options.markOfTheWild}
-                  onChange={(e) => handleOptionChange('markOfTheWild', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="markOfTheWild">
-                  Mark of the Wild
-                </label>
-              </div>
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="powerWordFortitude"
-                  checked={options.powerWordFortitude}
-                  onChange={(e) => handleOptionChange('powerWordFortitude', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="powerWordFortitude">
-                  Power Word: Fortitude
-                </label>
-              </div>
-            </div>
-            <div className="col-md-6">
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="chaosBrand"
-                  checked={options.chaosBrand}
-                  onChange={(e) => handleOptionChange('chaosBrand', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="chaosBrand">
-                  Chaos Brand
-                </label>
-              </div>
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="mysticTouch"
-                  checked={options.mysticTouch}
-                  onChange={(e) => handleOptionChange('mysticTouch', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="mysticTouch">
-                  Mystic Touch
-                </label>
-              </div>
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="skyfury"
-                  checked={options.skyfury}
-                  onChange={(e) => handleOptionChange('skyfury', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="skyfury">
-                  Skyfury Totem
-                </label>
-              </div>
-              <div className="form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="huntersMark"
-                  checked={options.huntersMark}
-                  onChange={(e) => handleOptionChange('huntersMark', e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="huntersMark">
-                  Hunter's Mark
-                </label>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+    const items = [];
+    const itemIds = new Set(); // Track unique items
+
+    // First, find the equipped item for the current slot
+    const currentSlot = slots.find(s => s.slotKey === currentSlotKey);
+    if (currentSlot && currentSlot.equipped) {
+      items.push({
+        ...currentSlot.equipped,
+        equippedIn: currentSlotKey
+      });
+      itemIds.add(currentSlot.equipped.id);
+    }
+
+    // Then add equipped items from other slots
+    sharedSlotKeys.forEach(slotKey => {
+      if (slotKey === currentSlotKey) return; // Skip current slot (already added)
       
-      <div className="form-check">
-        <input
-          type="checkbox"
-          className="form-check-input"
-          id="powerInfusion"
-          checked={options.powerInfusion}
-          onChange={(e) => handleOptionChange('powerInfusion', e.target.checked)}
-        />
-        <label className="form-check-label" htmlFor="powerInfusion">
-          Power Infusion
-        </label>
-      </div>
+      const slotData = slots.find(s => s.slotKey === slotKey);
+      if (!slotData) return;
+
+      // Add equipped item from other slots
+      if (slotData.equipped && !itemIds.has(slotData.equipped.id)) {
+        items.push({
+          ...slotData.equipped,
+          equippedIn: slotKey
+        });
+        itemIds.add(slotData.equipped.id);
+      }
+    });
+
+    // Finally, add all alternatives
+    sharedSlotKeys.forEach(slotKey => {
+      const slotData = slots.find(s => s.slotKey === slotKey);
+      if (!slotData || !slotData.alternatives) return;
+
+      slotData.alternatives.forEach(alt => {
+        if (!itemIds.has(alt.id)) {
+          items.push({
+            ...alt,
+            equippedIn: null
+          });
+          itemIds.add(alt.id);
+        }
+      });
+    });
+
+    return items;
+  };
+
+  // Initialize with equipped items selected when slots change
+  useEffect(() => {
+    if (!slots || slots.length === 0) return;
+
+    const initialSelected = {};
+    slots.forEach(slot => {
+      // For ring slots (special case)
+      if (slot.slotKey === 'rings' && slot.equipped && Array.isArray(slot.equipped)) {
+        initialSelected['rings'] = slot.equipped.map(ring => ({
+          id: ring.id,
+          item: ring
+        }));
+      }
+      // For regular equipped items
+      else if (slot.equipped) {
+        initialSelected[slot.slotKey] = [{
+          id: slot.equipped.id,
+          item: slot.equipped
+        }];
+      }
+    });
+
+    setSelectedItems(initialSelected);
+  }, [slots]);
+
+  // Generate combinations whenever selected items change
+  useEffect(() => {
+    const combinations = generateCombinations();
+    combinationCallbackRef.current(combinations);
+
+    // Only log if combinations actually changed
+    const combinationsString = JSON.stringify(combinations);
+    if (combinationsString !== lastLoggedCombinations) {
+      console.log(`Generated ${combinations.length} combinations`);
+      setLastLoggedCombinations(combinationsString);
+    }
+  }, [selectedItems]);
+
+  // Toggle item selection
+  const handleItemToggle = (slotKey, itemId, item, isSelected) => {
+    setSelectedItems(prev => {
+      const newSelected = { ...prev };
+      
+      // Initialize slot if needed
+      if (!newSelected[slotKey]) {
+        newSelected[slotKey] = [];
+      }
+
+      if (isSelected) {
+        // Add item if not already present
+        if (!newSelected[slotKey].some(i => i.id === itemId)) {
+          newSelected[slotKey] = [...newSelected[slotKey], { id: itemId, item }];
+        }
+      } else {
+        // Remove item
+        newSelected[slotKey] = newSelected[slotKey].filter(i => i.id !== itemId);
+      }
+
+      return newSelected;
+    });
+  };
+
+  // Check if item violates unique constraints within a combination
+  const violatesUniqueConstraints = (combination) => {
+    const uniqueItems = new Set();
+    const categoryCount = {};
+    const usedItemIds = new Set(); // Track overall item usage
+
+    // Check all items in the combination
+    for (const [slotKey, item] of Object.entries(combination)) {
+      if (!item) continue;
+
+      // Don't allow the same item in multiple slots
+      if (usedItemIds.has(item.id)) {
+        return true;
+      }
+      usedItemIds.add(item.id);
+
+      // For unique-equipped items
+      if (item.unique_equipped || (item.flags && item.flags.includes('unique-equipped'))) {
+        if (uniqueItems.has(item.id)) {
+          return true; // Duplicate unique item
+        }
+        uniqueItems.add(item.id);
+      }
+
+      // For unique-equipped categories (like embellished items)
+      if (item.unique_equipped_category) {
+        const category = item.unique_equipped_category;
+        categoryCount[category] = (categoryCount[category] || 0) + 1;
+        
+        const limit = item.unique_equipped_limit || 1;
+        if (categoryCount[category] > limit) {
+          return true; // Category limit exceeded
+        }
+      }
+    }
+
+    return false;
+  };
+
+  // Generate all valid combinations from selected items
+  const generateCombinations = () => {
+    const slots = Object.keys(selectedItems).filter(key => key !== 'rings');
+    
+    // Handle ring combinations separately
+    const ringCombinations = [];
+    const selectedRings = selectedItems['rings'] || [];
+    
+    if (selectedRings.length >= 2) {
+      for (let i = 0; i < selectedRings.length; i++) {
+        for (let j = i + 1; j < selectedRings.length; j++) {
+          ringCombinations.push({
+            finger1: selectedRings[i].item,
+            finger2: selectedRings[j].item
+          });
+        }
+      }
+    }
+
+    // If no rings, can't generate valid combinations
+    if (ringCombinations.length === 0) return [];
+
+    // Generate non-ring combinations
+    const generateForSlot = (index, current) => {
+      // Base case: all slots processed
+      if (index === slots.length) {
+        // Add each ring combination to the current combination
+        return ringCombinations.map(ringCombo => ({
+          ...current,
+          ...ringCombo
+        }));
+      }
+
+      const slotKey = slots[index];
+      const items = selectedItems[slotKey] || [];
+      const results = [];
+
+      // Generate for each item in current slot
+      for (const { item } of items) {
+        const newCurrent = { ...current, [slotKey]: item };
+        results.push(...generateForSlot(index + 1, newCurrent));
+      }
+
+      return results;
+    };
+
+    // Generate all possible combinations
+    const allCombinations = generateForSlot(0, {});
+    
+    // Filter out combinations that violate unique constraints
+    return allCombinations.filter(combo => !violatesUniqueConstraints(combo));
+  };
+
+  // Render the item selection interface
+  if (!slots || slots.length === 0) return null;
+
+  return (
+    <div className="row row-cols-1 row-cols-md-3 g-3 justify-content-center">
+      {slots.map(slot => {
+        // Special case for rings
+        if (slot.slotKey === 'rings') {
+          return (
+            <div className="col" key="rings">
+              <div className="card">
+                <div className="card-header bg-dark-subtle text-muted">
+                  <strong>Rings</strong>
+                </div>
+                <div className="list-group list-group-flush">
+                  {slot.equipped && Array.isArray(slot.equipped) && slot.equipped.map((ring, idx) => (
+                    <div className="list-group-item" key={`equipped-ring-${idx}`}>
+                      <Item
+                        item={ring}
+                        slotKey="rings"
+                        defaultChecked={true}
+                        onToggle={(isChecked) => handleItemToggle('rings', ring.id, ring, isChecked)}
+                        isSelected={(selectedItems['rings'] || []).some(item => item.id === ring.id)}
+                      />
+                    </div>
+                  ))}
+                  {slot.alternatives.map((ring, idx) => (
+                    <div className="list-group-item list-group-item-secondary" key={`alt-ring-${idx}`}>
+                      <Item
+                        item={ring}
+                        slotKey="rings"
+                        defaultChecked={false}
+                        onToggle={(isChecked) => handleItemToggle('rings', ring.id, ring, isChecked)}
+                        isSelected={(selectedItems['rings'] || []).some(item => item.id === ring.id)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {selectedItems['rings'] && selectedItems['rings'].length < 2 && (
+                <div className="alert alert-warning mt-2">
+                  Please select at least 2 rings
+                </div>
+              )}
+            </div>
+          );
+        }
+        
+        // Handle trinket slots - show ALL trinkets, current equipped first
+        if (slot.slotKey === 'trinket1' || slot.slotKey === 'trinket2') {
+          const allTrinkets = getItemsForType('trinket', slot.slotKey);
+          
+          return (
+            <div className="col" key={slot.slotKey}>
+              <div className="card">
+                <div className="card-header bg-dark-subtle text-muted">
+                  <strong>{slot.name}</strong>
+                </div>
+                <div className="list-group list-group-flush">
+                  {allTrinkets.map((trinket, idx) => {
+                    const isEquippedHere = trinket.equippedIn === slot.slotKey;
+                    const className = isEquippedHere ? "list-group-item" : "list-group-item list-group-item-secondary";
+                    
+                    return (
+                      <div className={className} key={`${slot.slotKey}-trinket-${idx}`}>
+                        <Item
+                          item={trinket}
+                          slotKey={slot.slotKey}
+                          defaultChecked={isEquippedHere}
+                          onToggle={(isChecked) => handleItemToggle(slot.slotKey, trinket.id, trinket, isChecked)}
+                          isSelected={(selectedItems[slot.slotKey] || []).some(item => item.id === trinket.id)}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          );
+        }
+        
+        // Handle weapon slots - show ALL weapons, current equipped first
+        if (slot.slotKey === 'main_hand' || slot.slotKey === 'off_hand') {
+          const allWeapons = getItemsForType('weapon', slot.slotKey);
+          
+          return (
+            <div className="col" key={slot.slotKey}>
+              <div className="card">
+                <div className="card-header bg-dark-subtle text-muted">
+                  <strong>{slot.name}</strong>
+                </div>
+                <div className="list-group list-group-flush">
+                  {allWeapons.map((weapon, idx) => {
+                    const isEquippedHere = weapon.equippedIn === slot.slotKey;
+                    const className = isEquippedHere ? "list-group-item" : "list-group-item list-group-item-secondary";
+                    
+                    return (
+                      <div className={className} key={`${slot.slotKey}-weapon-${idx}`}>
+                        <Item
+                          item={weapon}
+                          slotKey={slot.slotKey}
+                          defaultChecked={isEquippedHere}
+                          onToggle={(isChecked) => handleItemToggle(slot.slotKey, weapon.id, weapon, isChecked)}
+                          isSelected={(selectedItems[slot.slotKey] || []).some(item => item.id === weapon.id)}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          );
+        }
+        
+        // Regular slots
+        return (
+          <div className="col" key={slot.slotKey}>
+            <ItemSlot
+              {...slot}
+              onItemToggle={(itemId, item, isSelected) =>
+                handleItemToggle(slot.slotKey, itemId, item, isSelected)
+              }
+              selectedItems={selectedItems[slot.slotKey] || []}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 };
 
-export default AdditionalOptions;
+export default ItemSelect;
 ```
 
-`CombinationsDisplay.jsx`
-```jsx
-function CombinationsDisplay({ combinations, characterData, itemsData }) {
-  // Check if we have any combinations (including the equipped gear combination)
-  const hasCombinations = combinations && combinations.length > 0;
-  
-  // If no combinations are selected, we still have the equipped gear as a single combination
-  const totalCombinations = hasCombinations ? combinations.length : 1;
-  const hasAlternatives = hasCombinations && combinations.length > 1;
+`SimcParser.js`
+```js
+import { ConstraintValidator } from './ClassConstraints';
 
-  return (
-    <div className="alert alert-info mb-3">
-      <h6 className="alert-heading mb-2">
-        Ready to simulate {totalCombinations} {totalCombinations === 1 ? 'combination' : 'combinations'}
-      </h6>
-      <p className="mb-0 small">
-        {hasCombinations && hasAlternatives ? (
-          `Including your currently equipped gear and ${combinations.length - 1} ${combinations.length === 2 ? 'alternative' : 'alternatives'}`
-        ) : (
-          'Using your currently equipped gear only'
-        )}
-      </p>
-    </div>
-  );
+export class SimcParser {
+  // Extract class and spec from SimC input
+  static extractCharacterInfo(simcInput) {
+    const lines = simcInput.split('\n');
+    let characterInfo = {
+      class: null,
+      spec: null,
+      name: 'Character',
+      level: null,
+      race: null,
+      region: null,
+      server: null
+    };
+
+    // Extract character name from comment
+    const commentLine = lines.find(line => line.startsWith('#'));
+    if (commentLine) {
+      const match = commentLine.match(/^#\s*([^\s-]+)/);
+      if (match && match[1]) {
+        characterInfo.name = match[1];
+      }
+    }
+
+    // Extract other character information
+    for (const line of lines) {
+      if (line.startsWith('#') || line.startsWith('//')) continue;
+
+      if (line.startsWith('spec=')) {
+        characterInfo.spec = line.substring(5).toLowerCase();
+        
+        // Determine class from spec
+        characterInfo.class = SimcParser.getClassFromSpec(characterInfo.spec);
+      } else if (line.startsWith('level=')) {
+        characterInfo.level = parseInt(line.substring(6));
+      } else if (line.startsWith('race=')) {
+        characterInfo.race = line.substring(5);
+      } else if (line.startsWith('region=')) {
+        characterInfo.region = line.substring(7);
+      } else if (line.startsWith('server=')) {
+        characterInfo.server = line.substring(7);
+      }
+
+      // Also check for direct class definitions (like "rogue=CharacterName")
+      const classMatch = line.match(/^([a-z_]+)="?([^"]+)"?$/);
+      if (classMatch) {
+        const possibleClass = classMatch[1].toLowerCase();
+        if (ConstraintValidator.getClassConstraints(possibleClass)) {
+          characterInfo.class = possibleClass;
+          characterInfo.name = classMatch[2];
+        }
+      }
+    }
+
+    return characterInfo;
+  }
+
+  // Map specs to their respective classes
+  static getClassFromSpec(specName) {
+    const specClassMap = {
+      // Warrior
+      'arms': 'warrior',
+      'fury': 'warrior',
+      'protection': 'warrior',
+      
+      // Paladin
+      'holy': 'paladin', // Note: Both paladin and priest have holy
+      'retribution': 'paladin',
+      // 'protection': 'paladin', // Same name as warrior, handled by context
+      
+      // Hunter
+      'beast_mastery': 'hunter',
+      'marksmanship': 'hunter',
+      'survival': 'hunter',
+      
+      // Rogue
+      'assassination': 'rogue',
+      'outlaw': 'rogue',
+      'subtlety': 'rogue',
+      
+      // Priest (holy conflicts with paladin, needs context)
+      'discipline': 'priest',
+      'shadow': 'priest',
+      
+      // Death Knight
+      'blood': 'death_knight',
+      'frost': 'death_knight', // Note: Also shaman, needs context
+      'unholy': 'death_knight',
+      
+      // Shaman (frost conflicts with death knight)
+      'elemental': 'shaman',
+      'enhancement': 'shaman',
+      'restoration': 'shaman', // Note: Also druid, needs context
+      
+      // Mage
+      'arcane': 'mage',
+      'fire': 'mage',
+      // 'frost': 'mage', // Conflicts with death knight and shaman
+      
+      // Warlock
+      'affliction': 'warlock',
+      'demonology': 'warlock',
+      'destruction': 'warlock',
+      
+      // Monk
+      'brewmaster': 'monk',
+      'mistweaver': 'monk',
+      'windwalker': 'monk',
+      
+      // Druid (restoration conflicts with shaman)
+      'balance': 'druid',
+      'feral': 'druid',
+      'guardian': 'druid',
+      
+      // Demon Hunter
+      'havoc': 'demon_hunter',
+      'vengeance': 'demon_hunter',
+      
+      // Evoker
+      'devastation': 'evoker',
+      'preservation': 'evoker',
+      'augmentation': 'evoker'
+    };
+
+    return specClassMap[specName] || null;
+  }
+
+  // Parse SimC input and extract equipped items
+  static parseEquippedItems(simcInput) {
+    const lines = simcInput.split('\n');
+    const equippedItems = {};
+    
+    for (const line of lines) {
+      if (line.startsWith('#') || line.startsWith('//')) continue;
+      
+      // Match equipment lines like: head=,id=231824,gem_id=213743,bonus_id=...
+      const equipMatch = line.match(/^([a-z_]+)=,(.+)$/);
+      if (equipMatch) {
+        const slot = equipMatch[1];
+        const itemData = equipMatch[2];
+        
+        equippedItems[slot] = SimcParser.parseItemData(itemData);
+      }
+    }
+    
+    return equippedItems;
+  }
+
+  // Parse individual item data from SimC format
+  static parseItemData(itemDataString) {
+    const parts = itemDataString.split(',');
+    const item = {};
+    
+    for (const part of parts) {
+      const [key, value] = part.split('=');
+      if (!key || !value) continue;
+      
+      switch (key) {
+        case 'id':
+          item.id = parseInt(value);
+          break;
+        case 'enchant_id':
+          item.enchant_id = parseInt(value);
+          break;
+        case 'gem_id':
+          item.gem_id = value.split('/').map(id => parseInt(id));
+          break;
+        case 'bonus_id':
+          item.bonus_id = value.split('/').map(id => parseInt(id));
+          break;
+        case 'crafted_stats':
+          item.crafted_stats = value.split('/').map(id => parseInt(id));
+          break;
+      }
+    }
+    
+    return item;
+  }
+
+  // Create character info string for SimC output
+  static createCharacterInfoString(characterInfo) {
+    const charInfo = [];
+    
+    if (characterInfo.class && characterInfo.name) {
+      charInfo.push(`${characterInfo.class}="${characterInfo.name}"`);
+    }
+    
+    if (characterInfo.level) {
+      charInfo.push(`level=${characterInfo.level}`);
+    }
+    
+    if (characterInfo.race) {
+      charInfo.push(`race=${characterInfo.race}`);
+    }
+    
+    if (characterInfo.region) {
+      charInfo.push(`region=${characterInfo.region}`);
+    }
+    
+    if (characterInfo.server) {
+      charInfo.push(`server=${characterInfo.server}`);
+    }
+    
+    if (characterInfo.spec) {
+      charInfo.push(`spec=${characterInfo.spec}`);
+    }
+    
+    return charInfo.join('\n');
+  }
+
+  // Validate character class/spec combination
+  static validateCharacterInfo(characterInfo) {
+    if (!characterInfo.class || !characterInfo.spec) {
+      return {
+        valid: false,
+        error: 'Missing class or spec information'
+      };
+    }
+
+    const classData = ConstraintValidator.getClassConstraints(characterInfo.class);
+    if (!classData) {
+      return {
+        valid: false,
+        error: `Unknown class: ${characterInfo.class}`
+      };
+    }
+
+    const specData = ConstraintValidator.getSpecConstraints(characterInfo.class, characterInfo.spec);
+    if (!specData) {
+      return {
+        valid: false,
+        error: `Unknown spec: ${characterInfo.spec} for class: ${characterInfo.class}`
+      };
+    }
+
+    return { valid: true };
+  }
 }
 
-export default CombinationsDisplay;
+export default SimcParser;
 ```
 
