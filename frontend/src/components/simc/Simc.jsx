@@ -45,39 +45,6 @@ const SimulationButton = memo(({ canSimulate, isSimulating, onRun }) => {
   );
 });
 
-// Isolated SimulationResults component
-const SimulationResults = memo(({ result, characterName = 'character' }) => {
-  const downloadReport = useCallback(() => {
-    if (!result) return;
-
-    const blob = new Blob([result], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${characterName}_sim_report.html`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, [result, characterName]);
-
-  return (
-    result && (
-      <CollapsibleSection title="Simulation Results">
-        <SimulationReport htmlContent={result} height="500px" />
-        <div className="d-flex justify-content-end mt-2">
-          <button
-            className="btn btn-secondary"
-            onClick={downloadReport}
-          >
-            Download Report
-          </button>
-        </div>
-      </CollapsibleSection>
-    )
-  );
-});
-
 function Simc() {
   // UI State only - things that affect rendering
   const [simulationResult, setSimulationResult] = useState(null);
@@ -147,6 +114,18 @@ function Simc() {
   });
 
   const resultsRef = useRef(null);
+
+  // Memoized components
+  const MemoizedSimulationReport = useMemo(
+    () => memo(() => (
+      <SimulationReport
+        htmlContent={simulationResult}
+        height="500px"
+        characterName={characterDisplayData?.name || 'character'}
+      />
+    )),
+    [simulationResult, characterDisplayData?.name]
+  );
 
   // Parse and validate data whenever input changes
   const parseAndValidateData = useCallback((data) => {
@@ -426,15 +405,11 @@ function Simc() {
       )}
 
       <div ref={resultsRef}>
-        <SimulationResults
-          result={simulationResult}
-          characterName={characterDisplayData?.name || 'character'}
-        />
+        <MemoizedSimulationReport />
       </div>
 
       <AddonInput
         onDataUpdate={handleDataUpdate}
-        pairedSlots={{ main_hand: 'off_hand', off_hand: 'main_hand', finger1: 'finger2', finger2: 'finger1', trinket1: 'trinket2', trinket2: 'trinket1' }}
         skippedSlots={['tabard', 'shirt']}
       />
 
